@@ -1,7 +1,7 @@
 package db
 
 import (
-	"github.com/capcom6/go-project-template/internal/db/migrations"
+	"github.com/android-sms-gateway/telegram-bridge/internal/db/migrations"
 	"github.com/go-core-fx/goosefx"
 	"github.com/go-core-fx/logger"
 	"github.com/pressly/goose/v3/database"
