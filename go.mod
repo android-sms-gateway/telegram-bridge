@@ -17,6 +17,7 @@ require (
 	github.com/samber/lo v1.53.0
 	github.com/swaggo/swag v1.16.6
 	github.com/urfave/cli/v3 v3.10.1
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 )
