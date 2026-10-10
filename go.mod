@@ -6,28 +6,22 @@ require (
 	github.com/android-sms-gateway/client-go v1.16.3
 	github.com/go-core-fx/config v0.1.0
 	github.com/go-core-fx/fiberfx v0.5.1
-	github.com/go-core-fx/goosefx v0.0.1
 	github.com/go-core-fx/healthfx v0.1.0
 	github.com/go-core-fx/logger v0.0.1
 	github.com/go-core-fx/telegofx v0.4.0
 	github.com/go-core-fx/validatorfx v0.0.2
 	github.com/go-playground/validator/v10 v10.30.3
-	github.com/go-sql-driver/mysql v1.10.0
 	github.com/gofiber/fiber/v2 v2.52.14
 	github.com/mymmrac/telego v1.11.2
-	github.com/pressly/goose/v3 v3.27.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/samber/lo v1.53.0
 	github.com/swaggo/swag v1.16.6
-	github.com/uptrace/bun v1.2.18
-	github.com/uptrace/bun/dialect/mysqldialect v1.2.18
 	github.com/urfave/cli/v3 v3.10.1
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/ansrivas/fiberprometheus/v2 v2.17.0 // indirect
@@ -58,7 +52,6 @@ require (
 	github.com/gofiber/swagger v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grbit/go-json v0.11.0 // indirect
-	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
@@ -73,23 +66,17 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect
-	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.69.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
-	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
-	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/swaggo/files/v2 v2.0.2 // indirect
-	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.73.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
-	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
-	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/dig v1.19.0 // indirect
