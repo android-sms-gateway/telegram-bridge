@@ -1,4 +1,4 @@
-# go-project-template — AGENTS.md
+# telegram-bridge — AGENTS.md
 
 ## Commands
 - `make deps` — go mod download
@@ -13,12 +13,13 @@
 
 ## Architecture
 - **Entrypoint**: main.go — swag //go:generate directive; version injected via ldflags (appVersion, appBuildDate, appReleaseID)
-- **CLI**: urfave/cli/v3 in internal/app.go — CLI shell with DefaultCommand "serve"; commands in internal/commands/{serve,example}/
-- **DI**: Fx graphs live in each command (internal/commands/serve/serve.go, internal/commands/example/example.go)
+- **CLI**: urfave/cli/v3 in internal/app.go — CLI shell with DefaultCommand "serve"; commands in internal/commands/serve/
+- **DI**: Fx graphs live in each command (internal/commands/serve/serve.go)
 - **Config**: go-core-fx/config — env vars + optional YAML via CONFIG_PATH env var
 - **HTTP**: Fiber at 127.0.0.1:3000, routes under /api/v1, validation middleware at group level
-- **Bot**: telego + telegofx (Telegram), proxy set via fasthttpproxy.FasthttpProxyHTTPDialer()
-- **DB**: MySQL/MariaDB via Bun (mysqldialect), Goose migrations in internal/db/migrations/ (//go:embed *.sql)
+- **Bot**: telego + telegofx (Telegram); proxy via `telegofx.Config.ProxyURL` (socks5:// / socks5h:// only)
+- **Config mapping**: raw koanf sections in internal/config/config.go mirror the runtime owner of each setting and are mapped in internal/config/module.go to the config that consumer takes - `telegram.token`/`telegram.proxy` (`TELEGRAM__TOKEN`, `TELEGRAM__PROXY_URL`) -> `telegofx.Config` (library-owned), `bridge.chat_id` (`BRIDGE__CHAT_ID`) -> `bridge.Config` (internal/bridge), `smsgate.webhook.signing_key` -> `webhook.Config`. The forward target moved out of the telegram section in R18; the old `TELEGRAM__CHAT_ID` is inert. Never provide bare primitives (int64, string, ...) through DI; even a single-field setting gets a module config struct the module consumes directly.
+- **DB**: none — the MySQL/Bun/Goose stack was dropped together with the internal/db package; `storage.url` is declared for a later wave and is not consumed yet
 - **Metrics**: Prometheus via fiberfx (auto), per-module counters via promauto
 
 ## Module Conventions
@@ -27,7 +28,7 @@
 - Internal-only deps use fx.Private
 - Services with Run(ctx) use `fxutil.RegisterRunnable[*T]()` — conditionally via `withRun` bool
 - Per-module named logger: logger.WithNamedLogger("name")
-- Config module maps raw Config struct to sub-configs for fiberfx, telegofx, sqlfx, openapi, example
+- Config module maps the raw Config struct to the value each consumer takes (fiberfx.Config, openapi.Config, telegofx.Config, bridge.Config, webhook.Config)
 
 ## Code Generation
 - Swagger docs: go generate ./... (swag init --parseDependency --outputTypes go -g ./main.go -o ./internal/server/docs)

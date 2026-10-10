@@ -4,17 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/capcom6/go-project-template/internal/bot"
-	"github.com/capcom6/go-project-template/internal/config"
-	"github.com/capcom6/go-project-template/internal/db"
-	"github.com/capcom6/go-project-template/internal/example"
-	"github.com/capcom6/go-project-template/internal/server"
-	"github.com/go-core-fx/bunfx"
+	"github.com/android-sms-gateway/telegram-bridge/internal/bot"
+	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
+	"github.com/android-sms-gateway/telegram-bridge/internal/config"
+	"github.com/android-sms-gateway/telegram-bridge/internal/server"
+	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
 	"github.com/go-core-fx/fiberfx"
-	"github.com/go-core-fx/goosefx"
 	"github.com/go-core-fx/healthfx"
 	"github.com/go-core-fx/logger"
-	"github.com/go-core-fx/sqlfx"
 	"github.com/go-core-fx/telegofx"
 	"github.com/go-core-fx/validatorfx"
 	"github.com/urfave/cli/v3"
@@ -39,33 +36,33 @@ func run(ctx context.Context, version healthfx.Version) error {
 		logger.Module(),
 		logger.WithFxDefaultLogger(),
 		// badgerfx.Module(),
-		bunfx.Module(),
+		// bunfx.Module(),
 		// cachefx.Module(),
 		fiberfx.Module(),
 		// gocqlfx.Module(),
 		// gocqlxfx.Module(),
-		goosefx.Module(),
+		// goosefx.Module(),
 		// gormfx.Module(),
 		healthfx.Module(),
 		// httpfx.Module(),
 		// openaifx.Module(),
 		// openrouterfx.Module(),
 		// redisfx.Module(),
-		sqlfx.Module(),
+		// sqlfx.Module(),
 		// sqlxfx.Module(),
-		telegofx.Module(true),
+		telegofx.Module(telegofx.WithRouter()),
 		validatorfx.Module(),
 		// watermillfx.Module(),
 		//
 		// APP MODULES
 		config.Module(),
-		db.Module(),
 		server.Module(),
 		bot.Module(),
 		//
 		// BUSINESS MODULES
 		fx.Supply(version),
-		example.Module(true),
+		bridge.Module(),
+		webhook.Module(),
 
 		fx.Invoke(func(lc fx.Lifecycle, logger *zap.Logger) {
 			lc.Append(fx.Hook{
