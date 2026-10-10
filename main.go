@@ -1,8 +1,8 @@
-// Golang project template
+// Telegram bridge
 //
-//	@title			Project API
+//	@title			Telegram Bridge API
 //	@version		1.0.0
-//	@description	Project API documentation
+//	@description	Bridge between SMSGate webhooks and Telegram
 //
 //	@contact.name	API Support
 //	@contact.url	https://github.com/capcom6
@@ -19,7 +19,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/capcom6/go-project-template/internal"
+	"github.com/android-sms-gateway/telegram-bridge/internal"
 	"github.com/go-core-fx/healthfx"
 	"github.com/samber/lo"
 )
