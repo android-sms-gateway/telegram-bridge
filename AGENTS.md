@@ -18,7 +18,8 @@
 - **Config**: go-core-fx/config — env vars + optional YAML via CONFIG_PATH env var
 - **HTTP**: Fiber at 127.0.0.1:3000, routes under /api/v1, validation middleware at group level
 - **Bot**: telego + telegofx (Telegram); proxy via `telegofx.Config.ProxyURL` (socks5:// / socks5h:// only)
-- **Config mapping**: raw koanf sections in internal/config/config.go mirror the runtime owner of each setting and are mapped in internal/config/module.go to the config that consumer takes - `telegram.token`/`telegram.proxy` (`TELEGRAM__TOKEN`, `TELEGRAM__PROXY`) -> `telegofx.Config` (library-owned), `bridge.chat_id` (`BRIDGE__CHAT_ID`) -> `bridge.Config` (internal/bridge), `smsgate.webhook.signing_key` -> `webhook.Config`. The forward target moved out of the telegram section in R18; the old `TELEGRAM__CHAT_ID` is inert. Never provide bare primitives (int64, string, ...) through DI; even a single-field setting gets a module config struct the module consumes directly.
+- **Config mapping**: raw koanf sections in internal/config/config.go mirror the runtime owner of each setting and are mapped in internal/config/module.go to the config that consumer takes - `telegram.token`/`telegram.proxy` (`TELEGRAM__TOKEN`, `TELEGRAM__PROXY`) -> `telegofx.Config` (library-owned), `bridge.chat_id` (`BRIDGE__CHAT_ID`) -> `bridge.Config` (internal/bridge), `smsgate.webhook.signing_key` -> `webhook.Config`, `storage.url` (`STORAGE__URL`) -> `boltfx.Config` (pkg/boltfx, opens the file for internal/store; the parent directory must exist before startup). The forward target moved out of the telegram section in R18; the old `TELEGRAM__CHAT_ID` is inert. Never provide bare primitives (int64, string, ...) through DI; even a single-field setting gets a module config struct the module consumes directly.
+- **Store**: internal/store (bbolt, `store.Module(true)`) maps `chatID:telegramMessageID` -> `{phone, created_at, expires_at}` in the `mappings` bucket plus a single `offsets` key; TTL 7 days (`store.DefaultTTL`), expiry enforced on read and by a 15m cleanup runnable.
 - **DB**: MySQL/MariaDB via Bun (mysqldialect), Goose migrations in internal/db/migrations/ (//go:embed *.sql)
 - **Metrics**: Prometheus via fiberfx (auto), per-module counters via promauto
 
@@ -28,7 +29,7 @@
 - Internal-only deps use fx.Private
 - Services with Run(ctx) use `fxutil.RegisterRunnable[*T]()` — conditionally via `withRun` bool
 - Per-module named logger: logger.WithNamedLogger("name")
-- Config module maps the raw Config struct to the value each consumer takes (fiberfx.Config, openapi.Config, telegofx.Config, bridge.Config, webhook.Config)
+- Config module maps the raw Config struct to the value each consumer takes (fiberfx.Config, openapi.Config, telegofx.Config, bridge.Config, webhook.Config, boltfx.Config, store.Config)
 
 ## Code Generation
 - Swagger docs: go generate ./... (swag init --parseDependency --outputTypes go -g ./main.go -o ./internal/server/docs)

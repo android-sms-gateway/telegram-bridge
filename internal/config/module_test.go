@@ -8,7 +8,9 @@ import (
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/android-sms-gateway/telegram-bridge/pkg/boltfx"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
 	"go.uber.org/fx"
@@ -314,6 +316,85 @@ func TestModuleConfigDefaults(t *testing.T) {
 
 			if gotWebhook != (webhook.Config{SigningKey: ""}) {
 				t.Fatalf("webhook.Config = %+v, want empty signing key (fail-closed)", gotWebhook)
+			}
+		})
+	}
+}
+
+// TestStorageConfigMapping asserts the raw storage section reaches pkg/boltfx
+// as the database URL, including its default, while the mapping TTL stays the
+// store's own default because no raw key carries it.
+func TestStorageConfigMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		unset   bool
+		wantURL string
+	}{
+		{
+			name:    "absolute url is mapped",
+			url:     "bolt:///var/lib/telegram-bridge/store.db",
+			unset:   false,
+			wantURL: "bolt:///var/lib/telegram-bridge/store.db",
+		},
+		{
+			name:    "relative url is mapped",
+			url:     "bolt://data/custom.db",
+			unset:   false,
+			wantURL: "bolt://data/custom.db",
+		},
+		{
+			name:    "unset env falls back to the raw default",
+			url:     "",
+			unset:   true,
+			wantURL: "bolt://data/telegram-bridge.db",
+		},
+		{
+			// An environment variable that is present but empty overrides the
+			// raw default, and the database is then opened with an empty URL.
+			name:    "empty env overrides the default",
+			url:     "",
+			unset:   false,
+			wantURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("STORAGE__URL", tt.url)
+
+			if tt.unset {
+				// t.Setenv registers the restore hook; Unsetenv then leaves the
+				// variable genuinely absent.
+				if err := os.Unsetenv("STORAGE__URL"); err != nil {
+					t.Fatalf("unset STORAGE__URL: %v", err)
+				}
+			}
+
+			var (
+				gotBolt  boltfx.Config
+				gotStore store.Config
+			)
+
+			app := fx.New(
+				fx.NopLogger,
+				config.Module(),
+				fx.Invoke(func(b boltfx.Config, s store.Config) {
+					gotBolt = b
+					gotStore = s
+				}),
+			)
+
+			if err := app.Err(); err != nil {
+				t.Fatalf("config module error = %v", err)
+			}
+
+			if gotBolt.URL != tt.wantURL {
+				t.Fatalf("boltfx.Config.URL = %q, want %q", gotBolt.URL, tt.wantURL)
+			}
+
+			if gotStore.TTL != store.DefaultTTL {
+				t.Fatalf("store.Config.TTL = %v, want %v", gotStore.TTL, store.DefaultTTL)
 			}
 		})
 	}
