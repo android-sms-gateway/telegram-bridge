@@ -10,13 +10,13 @@ import (
 // Raw koanf fields for every configuration section. Module-owned values are
 // mapped from here in module.go and reach their consumer as the bare value
 // that consumer takes.
-// Sections without a module yet (storage) stay raw until their wave-2 modules
-// are created.
 //
 // Every section mirrors exactly one runtime owner: telegram carries only
 // telegofx infrastructure and becomes telegofx.Config field by field; bridge
 // carries only the forward target and becomes bridge.Config; smsgate.webhook
-// nests under the SMSGate integration it authenticates.
+// nests under the SMSGate integration it authenticates; storage carries only the
+// embedded database location and becomes boltfx.Config, which opens the file for
+// internal/store.
 type http struct {
 	Address     string   `koanf:"address"`
 	ProxyHeader string   `koanf:"proxy_header"`
@@ -62,6 +62,9 @@ type smsgateConfig struct {
 	Webhook webhookConfig `koanf:"webhook"`
 }
 
+// storageConfig is the embedded database surface: the single bbolt file that
+// holds the bridge state. It reaches pkg/boltfx unchanged as
+// boltfx.Config{URL} (see module.go); internal/store owns the bucket schema.
 type storageConfig struct {
 	URL string `koanf:"url"`
 }

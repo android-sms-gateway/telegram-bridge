@@ -2,7 +2,9 @@ package config
 
 import (
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/android-sms-gateway/telegram-bridge/pkg/boltfx"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/fiberfx/openapi"
 	"github.com/go-core-fx/telegofx"
@@ -14,11 +16,13 @@ import (
 // library config as-is; the bridge-domain settings are mapped to the module
 // config their own module consumes.
 //
-//	fiberfx.Config                  <- http.*                        -> fiberfx
-//	openapi.Config                  <- http.openapi.*                -> openapi
+//	fiberfx.Config                  <- http.*                         -> fiberfx
+//	openapi.Config                  <- http.openapi.*                 -> openapi
 //	telegofx.Config                 <- telegram.token, telegram.proxy -> telegofx.New
-//	bridge.Config                   <- bridge.chat_id                -> bridge.New
-//	webhook.Config                  <- smsgate.webhook.signing_key   -> webhook.New
+//	bridge.Config                   <- bridge.chat_id                 -> bridge.New
+//	webhook.Config                  <- smsgate.webhook.signing_key    -> webhook.New
+//	boltfx.Config                   <- storage.url                    -> boltfx.New
+//	store.Config                    <- (store default)                -> store.NewRepository
 //
 // No bare primitives (int64, string, ...) are provided: fx would then have no
 // way to tell two values of the same type apart.
@@ -70,6 +74,22 @@ func Module() fx.Option {
 					// the device (Settings -> Webhooks -> Signing Key). The webhook
 					// service treats an empty key as fail-closed.
 					SigningKey: cfg.SMSGate.Webhook.SigningKey,
+				}
+			},
+			func(cfg Config) boltfx.Config {
+				// The storage section is the embedded database of the bridge, and
+				// pkg/boltfx owns how it is opened. Its parent directory is not
+				// created: the file has to be reachable before the service starts.
+				return boltfx.Config{
+					URL: cfg.Storage.URL,
+				}
+			},
+			func(_ Config) store.Config {
+				// The mapping TTL belongs to the store and stays on its own default:
+				// it is not operator-tunable yet, and adding a raw storage.ttl key
+				// would not change anything in this module.
+				return store.Config{
+					TTL: store.DefaultTTL,
 				}
 			},
 		),
