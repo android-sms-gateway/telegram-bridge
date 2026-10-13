@@ -7,6 +7,7 @@ import (
 	"github.com/android-sms-gateway/telegram-bridge/internal/bot"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
+	"github.com/android-sms-gateway/telegram-bridge/internal/smsgate"
 	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 
 	// "github.com/android-sms-gateway/telegram-bridge/internal/db".
@@ -70,6 +71,7 @@ func run(ctx context.Context, version healthfx.Version) error {
 		fx.Supply(version),
 		bridge.Module(),
 		webhook.Module(),
+		smsgate.Module(),
 
 		fx.Invoke(func(lc fx.Lifecycle, logger *zap.Logger) {
 			lc.Append(fx.Hook{

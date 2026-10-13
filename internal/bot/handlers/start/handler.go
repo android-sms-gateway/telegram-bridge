@@ -13,11 +13,15 @@ import (
 // startText describes the bridge when a user interacts with the bot.
 const startText = "Telegram bridge for SMSGate is connected. " +
 	"Messages received from your SMSGate webhooks will be forwarded to this chat. " +
-	"Replies are coming soon."
+	"Reply to a forwarded message and your answer is sent back as an SMS to the original sender."
 
+// Handler answers the /start command.
 type Handler struct {
 	logger *zap.Logger
 }
+
+// The bot module collects handlers through this interface.
+var _ handler.Handler = (*Handler)(nil)
 
 func New(logger *zap.Logger) handler.Handler {
 	return &Handler{
@@ -25,6 +29,12 @@ func New(logger *zap.Logger) handler.Handler {
 	}
 }
 
+// Register registers the /start route on the shared router.
+//
+// The route takes no allowed-users filter on purpose: /start only describes the
+// bot and drives nothing, so it stays open to every user. A stranger who types
+// /start learns that the bridge exists and nothing else, while the routes that
+// send SMS or deliver messages are still closed to them.
 func (h *Handler) Register(router *telegofx.Router) {
 	router.Handle(
 		h.handleStart,

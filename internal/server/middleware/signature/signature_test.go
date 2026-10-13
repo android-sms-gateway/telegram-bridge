@@ -136,8 +136,11 @@ func TestSignatureMiddleware(t *testing.T) {
 
 			reg := prometheus.NewRegistry()
 			metrics := webhook.NewMetricsWithRegisterer(reg)
+			// The middleware only exercises signature verification, so the
+			// forwarder and the repository are never reached and stay nil.
 			service := webhook.New(
 				webhook.Config{SigningKey: tt.signingKey},
+				nil,
 				nil,
 				metrics,
 				zap.NewNop(),

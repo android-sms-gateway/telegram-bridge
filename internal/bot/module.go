@@ -2,6 +2,7 @@ package bot
 
 import (
 	"github.com/android-sms-gateway/telegram-bridge/internal/bot/handler"
+	"github.com/android-sms-gateway/telegram-bridge/internal/bot/handlers/reply"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bot/handlers/start"
 	"github.com/go-core-fx/logger"
 	"github.com/go-core-fx/telegofx"
@@ -21,6 +22,7 @@ func Module() fx.Option {
 		fx.Provide(newBotOptions),
 		fx.Provide(
 			fx.Annotate(start.New, fx.ResultTags(`group:"handlers"`)),
+			fx.Annotate(reply.New, fx.ResultTags(`group:"handlers"`)),
 		),
 		fx.Invoke(
 			fx.Annotate(

@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	webhookhandler "github.com/android-sms-gateway/telegram-bridge/internal/server/handlers/webhook"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/android-sms-gateway/telegram-bridge/pkg/boltfx"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/fiberfx/validation"
 	"github.com/go-core-fx/telegofx"
@@ -59,6 +62,30 @@ type telegramSend struct {
 	ParseMode string `json:"parse_mode"`
 }
 
+// newTestRepo opens the mapping store the webhook service writes to after a
+// forward, exactly as pkg/boltfx and internal/store do in the serve graph.
+func newTestRepo(t *testing.T) *store.Repository {
+	t.Helper()
+
+	db, err := boltfx.New(boltfx.Config{URL: "bolt://" + filepath.Join(t.TempDir(), "handler.db")}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("close database: %v", cerr)
+		}
+	})
+
+	repo, err := store.NewRepository(store.Config{TTL: store.DefaultTTL}, db, zap.NewNop())
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+
+	return repo
+}
+
 // fixture bundles a fiber app with a stub Telegram API server. sent receives
 // one entry per sendMessage call the app performs.
 type fixture struct {
@@ -99,8 +126,16 @@ func newFixture(t *testing.T, signingKey string, m *webhook.Metrics) *fixture {
 		t.Fatalf("create bot: %v", err)
 	}
 
-	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, bot, zap.NewNop())
-	service := webhook.New(webhook.Config{SigningKey: signingKey}, forwarder, m, zap.NewNop())
+	// Forward-only construction: the reply allowlist is empty, and the reply
+	// collaborators are nil because no case here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		bot,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+	service := webhook.New(webhook.Config{SigningKey: signingKey}, forwarder, newTestRepo(t), m, zap.NewNop())
 	handler := webhookhandler.New(service, validator.New())
 
 	f.app = fiber.New(fiber.Config{ErrorHandler: fiberfx.NewJSONErrorHandler(zap.NewNop())})
