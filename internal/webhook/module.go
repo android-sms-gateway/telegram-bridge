@@ -10,7 +10,8 @@ import (
 // The service is provided publicly so other modules (the server module's
 // webhook handler) can consume it; metrics stay private to this module. The
 // HTTP handler itself lives in internal/server/handlers/webhook and is
-// registered by the server module.
+// registered by the server module. The repository comes from internal/store,
+// which owns the durable mapping written after every forward.
 func Module() fx.Option {
 	return fx.Module(
 		"webhook",
