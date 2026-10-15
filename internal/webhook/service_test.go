@@ -8,8 +8,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
@@ -27,17 +29,21 @@ const (
 
 	testSigningKey       = "test-signing-key"
 	testChatID     int64 = 123456789
-	testTimestamp        = "1700000000"
 	testSender           = "6505551212"
 	testMessage          = "hello"
 )
 
+// timestampAt formats t as the Unix-seconds X-Timestamp value.
+func timestampAt(t time.Time) string {
+	return strconv.FormatInt(t.Unix(), 10)
+}
+
 // sign computes the SMSGate payload signature: hex HMAC-SHA256 over the raw
-// body followed by the fixed test timestamp string.
-func sign(key, body string) string {
+// body followed by the given timestamp string.
+func sign(key, body, timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(body))
-	mac.Write([]byte(testTimestamp))
+	mac.Write([]byte(timestamp))
 
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -82,6 +88,12 @@ func TestService_Verify(t *testing.T) {
 
 	const body = `{"payload":{"sender":"` + testSender + `","message":"` + testMessage + `"}}`
 
+	now := time.Now()
+	ts := timestampAt(now)
+	staleTS := timestampAt(now.Add(-10 * time.Minute))
+	futureTS := timestampAt(now.Add(10 * time.Minute))
+	otherTS := timestampAt(now.Add(time.Minute))
+
 	tests := []struct {
 		name         string
 		signingKey   string
@@ -94,8 +106,8 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "valid signature passes",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey, body),
-			timestamp:    testTimestamp,
+			signature:    sign(testSigningKey, body, ts),
+			timestamp:    ts,
 			body:         body,
 			wantErr:      false,
 			wantRejected: 0,
@@ -104,7 +116,7 @@ func TestService_Verify(t *testing.T) {
 			name:         "missing signature",
 			signingKey:   testSigningKey,
 			signature:    "",
-			timestamp:    testTimestamp,
+			timestamp:    ts,
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,
@@ -112,7 +124,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "missing timestamp",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey, body),
+			signature:    sign(testSigningKey, body, ts),
 			timestamp:    "",
 			body:         body,
 			wantErr:      true,
@@ -121,8 +133,8 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "wrong key",
 			signingKey:   testSigningKey,
-			signature:    sign("other-key", body),
-			timestamp:    testTimestamp,
+			signature:    sign("other-key", body, ts),
+			timestamp:    ts,
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,
@@ -130,17 +142,44 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "tampered body",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey, `{"payload":{"sender":"attacker","message":"evil"}}`),
-			timestamp:    testTimestamp,
+			signature:    sign(testSigningKey, `{"payload":{"sender":"attacker","message":"evil"}}`, ts),
+			timestamp:    ts,
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,
 		},
 		{
-			name:         "tampered timestamp",
+			name:         "mismatched timestamp",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey, body),
-			timestamp:    "1700000001",
+			signature:    sign(testSigningKey, body, otherTS),
+			timestamp:    ts,
+			body:         body,
+			wantErr:      true,
+			wantRejected: 1,
+		},
+		{
+			name:         "stale timestamp rejected",
+			signingKey:   testSigningKey,
+			signature:    sign(testSigningKey, body, staleTS),
+			timestamp:    staleTS,
+			body:         body,
+			wantErr:      true,
+			wantRejected: 1,
+		},
+		{
+			name:         "future timestamp rejected",
+			signingKey:   testSigningKey,
+			signature:    sign(testSigningKey, body, futureTS),
+			timestamp:    futureTS,
+			body:         body,
+			wantErr:      true,
+			wantRejected: 1,
+		},
+		{
+			name:         "malformed timestamp rejected",
+			signingKey:   testSigningKey,
+			signature:    sign(testSigningKey, body, "not-a-unix-timestamp"),
+			timestamp:    "not-a-unix-timestamp",
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,
@@ -148,8 +187,8 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "empty configured key denies every request",
 			signingKey:   "",
-			signature:    sign("", body),
-			timestamp:    testTimestamp,
+			signature:    sign("", body, ts),
+			timestamp:    ts,
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,
@@ -157,8 +196,8 @@ func TestService_Verify(t *testing.T) {
 		{
 			name:         "uppercase signature rejected",
 			signingKey:   testSigningKey,
-			signature:    strings.ToUpper(sign(testSigningKey, body)),
-			timestamp:    testTimestamp,
+			signature:    strings.ToUpper(sign(testSigningKey, body, ts)),
+			timestamp:    ts,
 			body:         body,
 			wantErr:      true,
 			wantRejected: 1,

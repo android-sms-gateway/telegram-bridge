@@ -45,7 +45,7 @@ func (h *Handler) Register(r fiber.Router) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			X-Signature	header		string	true	"Hex HMAC-SHA256 signature of the raw body followed by the timestamp"
-//	@Param			X-Timestamp	header		string	true	"Unix timestamp (seconds) used in the signature"
+//	@Param			X-Timestamp	header		string	true	"Unix timestamp (seconds) used in the signature; must be within 5 minutes of server time"
 //	@Param			request		body		Request	true	"SMSGate webhook payload"
 //	@Success		200			{object}	ForwardResponse
 //	@Failure		400			{object}	fiberfx.ErrorResponse

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	webhookhandler "github.com/android-sms-gateway/telegram-bridge/internal/server/handlers/webhook"
@@ -29,7 +31,6 @@ const (
 
 	testSigningKey       = "test-signing-key"
 	testChatID     int64 = 123456789
-	testTimestamp        = "1700000000"
 	testMessageID        = "abc123"
 	testSender           = "6505551212"
 	testMessage          = "hello <world> & friends"
@@ -41,12 +42,17 @@ const (
 		`"receivedAt":"2024-06-22T15:46:11.000+07:00"}}`
 )
 
+// timestampAt formats t as the Unix-seconds X-Timestamp value.
+func timestampAt(t time.Time) string {
+	return strconv.FormatInt(t.Unix(), 10)
+}
+
 // sign computes the SMSGate payload signature: hex HMAC-SHA256 over the raw
-// body followed by the fixed test timestamp string.
-func sign(key, body string) string {
+// body followed by the given timestamp string.
+func sign(key, body, timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(body))
-	mac.Write([]byte(testTimestamp))
+	mac.Write([]byte(timestamp))
 
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -118,6 +124,10 @@ func TestHandlerPost(t *testing.T) {
 
 	metrics := webhook.NewMetrics()
 
+	now := time.Now()
+	ts := timestampAt(now)
+	staleTS := timestampAt(now.Add(-10 * time.Minute))
+
 	tests := []struct {
 		name        string
 		signingKey  string
@@ -141,8 +151,8 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "wrong key",
 			signingKey:  testSigningKey,
-			signature:   sign("other-key", validBody),
-			timestamp:   testTimestamp,
+			signature:   sign("other-key", validBody, ts),
+			timestamp:   ts,
 			body:        validBody,
 			wantStatus:  fiber.StatusUnauthorized,
 			wantPhone:   "",
@@ -151,8 +161,18 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "missing timestamp",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, validBody),
+			signature:   sign(testSigningKey, validBody, ts),
 			timestamp:   "",
+			body:        validBody,
+			wantStatus:  fiber.StatusUnauthorized,
+			wantPhone:   "",
+			wantForward: false,
+		},
+		{
+			name:        "stale timestamp",
+			signingKey:  testSigningKey,
+			signature:   sign(testSigningKey, validBody, staleTS),
+			timestamp:   staleTS,
 			body:        validBody,
 			wantStatus:  fiber.StatusUnauthorized,
 			wantPhone:   "",
@@ -161,8 +181,8 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "tampered body",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, strings.Replace(validBody, testMessage, "evil", 1)),
-			timestamp:   testTimestamp,
+			signature:   sign(testSigningKey, strings.Replace(validBody, testMessage, "evil", 1), ts),
+			timestamp:   ts,
 			body:        validBody,
 			wantStatus:  fiber.StatusUnauthorized,
 			wantPhone:   "",
@@ -171,8 +191,8 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "empty configured key denies all",
 			signingKey:  "",
-			signature:   sign("", validBody),
-			timestamp:   testTimestamp,
+			signature:   sign("", validBody, ts),
+			timestamp:   ts,
 			body:        validBody,
 			wantStatus:  fiber.StatusUnauthorized,
 			wantPhone:   "",
@@ -181,8 +201,8 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "valid signature forwards sender",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, validBody),
-			timestamp:   testTimestamp,
+			signature:   sign(testSigningKey, validBody, ts),
+			timestamp:   ts,
 			body:        validBody,
 			wantStatus:  fiber.StatusOK,
 			wantPhone:   testSender,
@@ -192,9 +212,9 @@ func TestHandlerPost(t *testing.T) {
 			name:       "falls back to deprecated phone number",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"payload":{"phoneNumber":"`+testSender+`","message":"legacy"}}`,
+				`{"payload":{"phoneNumber":"`+testSender+`","message":"legacy"}}`, ts,
 			),
-			timestamp:   testTimestamp,
+			timestamp:   ts,
 			body:        `{"payload":{"phoneNumber":"` + testSender + `","message":"legacy"}}`,
 			wantStatus:  fiber.StatusOK,
 			wantPhone:   testSender,
@@ -204,9 +224,9 @@ func TestHandlerPost(t *testing.T) {
 			name:       "missing message",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"payload":{"sender":"`+testSender+`"}}`,
+				`{"payload":{"sender":"`+testSender+`"}}`, ts,
 			),
-			timestamp:   testTimestamp,
+			timestamp:   ts,
 			body:        `{"payload":{"sender":"` + testSender + `"}}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
@@ -216,9 +236,9 @@ func TestHandlerPost(t *testing.T) {
 			name:       "missing phone number",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"payload":{"message":"hi"}}`,
+				`{"payload":{"message":"hi"}}`, ts,
 			),
-			timestamp:   testTimestamp,
+			timestamp:   ts,
 			body:        `{"payload":{"message":"hi"}}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
@@ -227,8 +247,8 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "missing payload",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, `{}`),
-			timestamp:   testTimestamp,
+			signature:   sign(testSigningKey, `{}`, ts),
+			timestamp:   ts,
 			body:        `{}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
@@ -242,8 +262,8 @@ func TestHandlerPost(t *testing.T) {
 			// matches the template's example handler behavior.
 			name:        "malformed json",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, "{"),
-			timestamp:   testTimestamp,
+			signature:   sign(testSigningKey, "{", ts),
+			timestamp:   ts,
 			body:        "{",
 			wantStatus:  fiber.StatusInternalServerError,
 			wantPhone:   "",

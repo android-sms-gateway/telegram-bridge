@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/server/middleware/signature"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
@@ -18,17 +20,21 @@ import (
 
 const (
 	testSigningKey = "test-signing-key"
-	testTimestamp  = "1700000000"
 	testBody       = `{"payload":{"sender":"6505551212","message":"hello"}}`
 )
 
+// timestampAt formats t as the Unix-seconds X-Timestamp value.
+func timestampAt(t time.Time) string {
+	return strconv.FormatInt(t.Unix(), 10)
+}
+
 // sign computes the SMSGate payload signature: hex HMAC-SHA256 over the raw
-// request body followed by the fixed test timestamp string. Cases that send a
+// request body followed by the given timestamp string. Cases that send a
 // different X-Timestamp header are mismatched on purpose.
-func sign(key string) string {
+func sign(key, timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(testBody))
-	mac.Write([]byte(testTimestamp))
+	mac.Write([]byte(timestamp))
 
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -65,6 +71,10 @@ func counterValue(t *testing.T, reg *prometheus.Registry, result string) float64
 func TestSignatureMiddleware(t *testing.T) {
 	t.Parallel()
 
+	now := time.Now()
+	ts := timestampAt(now)
+	staleTS := timestampAt(now.Add(-10 * time.Minute))
+
 	tests := []struct {
 		name         string
 		signingKey   string
@@ -77,8 +87,8 @@ func TestSignatureMiddleware(t *testing.T) {
 		{
 			name:         "valid signature passes",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey),
-			timestamp:    testTimestamp,
+			signature:    sign(testSigningKey, ts),
+			timestamp:    ts,
 			body:         testBody,
 			wantStatus:   fiber.StatusOK,
 			wantRejected: 0,
@@ -87,7 +97,7 @@ func TestSignatureMiddleware(t *testing.T) {
 			name:         "missing signature header",
 			signingKey:   testSigningKey,
 			signature:    "",
-			timestamp:    testTimestamp,
+			timestamp:    ts,
 			body:         testBody,
 			wantStatus:   fiber.StatusUnauthorized,
 			wantRejected: 1,
@@ -95,7 +105,7 @@ func TestSignatureMiddleware(t *testing.T) {
 		{
 			name:         "missing timestamp header",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey),
+			signature:    sign(testSigningKey, ts),
 			timestamp:    "",
 			body:         testBody,
 			wantStatus:   fiber.StatusUnauthorized,
@@ -104,16 +114,25 @@ func TestSignatureMiddleware(t *testing.T) {
 		{
 			name:         "tampered body",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey),
-			timestamp:    testTimestamp,
+			signature:    sign(testSigningKey, ts),
+			timestamp:    ts,
 			body:         strings.Replace(testBody, "hello", "evil", 1),
+			wantStatus:   fiber.StatusUnauthorized,
+			wantRejected: 1,
+		},
+		{
+			name:         "stale timestamp",
+			signingKey:   testSigningKey,
+			signature:    sign(testSigningKey, staleTS),
+			timestamp:    staleTS,
+			body:         testBody,
 			wantStatus:   fiber.StatusUnauthorized,
 			wantRejected: 1,
 		},
 		{
 			name:         "malformed timestamp",
 			signingKey:   testSigningKey,
-			signature:    sign(testSigningKey),
+			signature:    sign(testSigningKey, "not-a-unix-timestamp"),
 			timestamp:    "not-a-unix-timestamp",
 			body:         testBody,
 			wantStatus:   fiber.StatusUnauthorized,
@@ -122,8 +141,8 @@ func TestSignatureMiddleware(t *testing.T) {
 		{
 			name:         "empty configured signing key denies every request",
 			signingKey:   "",
-			signature:    sign(""),
-			timestamp:    testTimestamp,
+			signature:    sign("", ts),
+			timestamp:    ts,
 			body:         testBody,
 			wantStatus:   fiber.StatusUnauthorized,
 			wantRejected: 1,

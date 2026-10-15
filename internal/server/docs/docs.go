@@ -46,7 +46,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Unix timestamp (seconds) used in the signature",
+                        "description": "Unix timestamp (seconds) used in the signature; must be within 5 minutes of server time",
                         "name": "X-Timestamp",
                         "in": "header",
                         "required": true

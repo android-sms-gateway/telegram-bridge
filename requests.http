@@ -1,5 +1,7 @@
 @baseURL=http://localhost:3000
 @signingKey=change-me
+# Must be the current unix time in seconds: the server rejects timestamps more
+# than 5 minutes from its own clock. Recompute it and @signature before sending.
 @timestamp=1700000000
 @signature=3e0051f22c33d7c3a7eed6ed15b471cb8166e3e145d287d170d36b37de175eb4
 
@@ -31,20 +33,26 @@ GET {{baseURL}}/metrics HTTP/1.1
 # Auth = SMSGate payload signing (docs.sms-gate.app, Webhooks -> Payload
 # Signing): X-Signature is the hex HMAC-SHA256 of the raw request body
 # followed by the X-Timestamp value (unix seconds), keyed with the device
-# signing key (SMSGATE__WEBHOOK__SIGNING_KEY here).
+# signing key (SMSGATE__WEBHOOK__SIGNING_KEY here). The server rejects a
+# timestamp more than 5 minutes from its own clock, so regenerate both values
+# for every run.
 #
-# Regenerating @signature for the fixed sample body below:
+# Regenerating @timestamp and @signature for the sample body below:
 #
-#   1. Save the exact JSON body (everything after the blank line in this
+#   1. Set @timestamp above to the current unix time in seconds:
+#
+#        date +%s
+#
+#   2. Save the exact JSON body (everything after the blank line in this
 #      request) to a file, e.g. webhook-body.json, with NO trailing newline.
-#   2. Compute:
+#   3. Compute:
 #
-#        printf '%s' "$(cat webhook-body.json)1700000000" \
+#        printf '%s' "$(cat webhook-body.json)<timestamp>" \
 #          | openssl dgst -sha256 -hmac "change-me" \
 #          | awk '{print $NF}'
 #
-#   3. Paste the hex digest into @signature above and 1700000000 into
-#      @timestamp (they must match: signature is computed over body+timestamp).
+#   4. Paste the hex digest into @signature above. The timestamp in the body
+#      suffix must match @timestamp (the signature covers body+timestamp).
 #
 # An empty SMSGATE__WEBHOOK__SIGNING_KEY rejects every request with 401. The
 # body matches the SMSGate app webhook envelope (event sms:received); only

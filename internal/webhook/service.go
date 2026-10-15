@@ -7,10 +7,17 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"go.uber.org/zap"
 )
+
+// signatureMaxAge bounds how far the X-Timestamp value may be from the current
+// time. The timestamp is part of the signed material, so rejecting old (or
+// future) requests limits how long a captured request can be replayed.
+const signatureMaxAge = 5 * time.Minute
 
 // Service verifies webhook signatures and forwards accepted payloads to
 // Telegram.
@@ -46,7 +53,9 @@ func New(cfg Config, bridge *bridge.Service, metrics *Metrics, logger *zap.Logge
 // failure. The signature is the hexadecimal HMAC-SHA256 digest of the raw
 // request body followed by the Unix timestamp string, keyed with the
 // configured signing key (SMSGate payload signing: X-Signature and
-// X-Timestamp headers).
+// X-Timestamp headers). The timestamp must be a Unix-seconds value within
+// signatureMaxAge of the current time, so a captured request cannot be
+// replayed indefinitely.
 //
 // Verification is fail-closed: an empty configured signing key rejects every
 // request.
@@ -79,9 +88,18 @@ func (s *Service) Forward(ctx context.Context, phoneNumber, message string) erro
 }
 
 // verifySignature compares the expected HMAC with the provided signature in
-// constant time.
+// constant time, after bounding the timestamp to the freshness window.
 func (s *Service) verifySignature(body []byte, signature, timestamp string) bool {
 	if s.signingKey == "" || signature == "" || timestamp == "" {
+		return false
+	}
+
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	if age := time.Since(time.Unix(ts, 0)); age > signatureMaxAge || age < -signatureMaxAge {
 		return false
 	}
 
