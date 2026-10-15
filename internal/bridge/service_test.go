@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
@@ -24,6 +25,15 @@ const (
 	testChatID  int64 = 123456789
 	testSender        = "6505551212"
 	testMessage       = "hello"
+
+	// telegramMessageLimit mirrors the production per-message character limit.
+	telegramMessageLimit = 4096
+
+	// HTML fragments of FormatForwardMessage, used to recover the message part
+	// from a formatted chunk.
+	forwardPrefixHTML = "New message from <b>"
+	forwardSepHTML    = "</b>:\n<code>"
+	forwardSuffixHTML = "</code>"
 )
 
 // telegramSendRequest mirrors the subset of the Telegram sendMessage body the
@@ -219,5 +229,193 @@ func TestService_Forward(t *testing.T) {
 				t.Fatalf("request path = %q, want %q", gotPath, wantPath)
 			}
 		})
+	}
+}
+
+// messageBudget is the number of message characters that still fit in one
+// Telegram message for testSender, after the fixed prefix and sender.
+func messageBudget() int {
+	return bridge.MessageBudgetForTest(testSender)
+}
+
+// splitFormatted recovers the sender and message parts from a formatted chunk
+// for ASCII-only test data (no HTML escaping applies).
+func splitFormatted(t *testing.T, chunk string) (string, string) {
+	t.Helper()
+
+	if !strings.HasPrefix(chunk, forwardPrefixHTML) || !strings.HasSuffix(chunk, forwardSuffixHTML) {
+		t.Fatalf("chunk is not a formatted forward message: %q", chunk)
+	}
+
+	inner := chunk[len(forwardPrefixHTML) : len(chunk)-len(forwardSuffixHTML)]
+
+	sender, part, ok := strings.Cut(inner, forwardSepHTML)
+	if !ok {
+		t.Fatalf("chunk is missing the sender/message separator: %q", chunk)
+	}
+
+	return sender, part
+}
+
+// assertChunksValid checks that every chunk is a formatted message whose
+// sender is testSender and whose parsed length fits Telegram's limit.
+func assertChunksValid(t *testing.T, chunks []string, budget int) {
+	t.Helper()
+
+	for i, chunk := range chunks {
+		sender, part := splitFormatted(t, chunk)
+
+		if sender != testSender {
+			t.Fatalf("chunk %d sender = %q, want %q", i, sender, testSender)
+		}
+
+		if got := bridge.TextLengthForTest(part); got > budget {
+			t.Fatalf("chunk %d message length = %d, want <= %d", i, got, budget)
+		}
+	}
+}
+
+func TestFormatForwardMessageChunks(t *testing.T) {
+	t.Parallel()
+
+	budget := messageBudget()
+
+	tests := []struct {
+		name      string
+		sender    string
+		message   string
+		wantParts int
+		wantErr   error
+	}{
+		{
+			name:      "short message stays a single part",
+			sender:    testSender,
+			message:   testMessage,
+			wantParts: 1,
+			wantErr:   nil,
+		},
+		{
+			name:      "exact budget stays a single part",
+			sender:    testSender,
+			message:   strings.Repeat("a", budget),
+			wantParts: 1,
+			wantErr:   nil,
+		},
+		{
+			name:      "one over budget splits in two",
+			sender:    testSender,
+			message:   strings.Repeat("a", budget+1),
+			wantParts: 2,
+			wantErr:   nil,
+		},
+		{
+			name:      "multiple parts",
+			sender:    testSender,
+			message:   strings.Repeat("a", budget*3+7),
+			wantParts: 4,
+			wantErr:   nil,
+		},
+		{
+			// Each emoji is two UTF-16 code units, so only budget/2 fit per
+			// part; the rune itself is never cut in half.
+			name:      "astral runes are not split",
+			sender:    testSender,
+			message:   strings.Repeat("\U0001F600", budget),
+			wantParts: 3,
+			wantErr:   nil,
+		},
+		{
+			name:      "sender leaves no room",
+			sender:    strings.Repeat("9", telegramMessageLimit),
+			message:   testMessage,
+			wantParts: 0,
+			wantErr:   bridge.ErrMessageTooLong,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			chunks, err := bridge.FormatForwardMessageChunksForTest(tt.sender, tt.message)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tt.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+
+			if len(chunks) != tt.wantParts {
+				t.Fatalf("parts = %d, want %d", len(chunks), tt.wantParts)
+			}
+
+			assertChunksValid(t, chunks, budget)
+
+			var rebuilt strings.Builder
+			for _, chunk := range chunks {
+				_, part := splitFormatted(t, chunk)
+				rebuilt.WriteString(part)
+			}
+
+			if rebuilt.String() != tt.message {
+				t.Fatalf("rebuilt message = %q, want %q", rebuilt.String(), tt.message)
+			}
+		})
+	}
+}
+
+func TestService_ForwardSplitsLongMessage(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		texts []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req telegramSendRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		texts = append(texts, req.Text)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+	}))
+	defer server.Close()
+
+	service := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, server.URL), zap.NewNop())
+
+	message := strings.Repeat("x", messageBudget()*2+5)
+
+	if err := service.Forward(context.Background(), testSender, message); err != nil {
+		t.Fatalf("Forward() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(texts) < 2 {
+		t.Fatalf("sendMessage calls = %d, want at least 2", len(texts))
+	}
+
+	assertChunksValid(t, texts, messageBudget())
+
+	var rebuilt strings.Builder
+	for _, text := range texts {
+		_, part := splitFormatted(t, text)
+		rebuilt.WriteString(part)
+	}
+
+	if rebuilt.String() != message {
+		t.Fatalf("rebuilt message = %q, want %q", rebuilt.String(), message)
 	}
 }

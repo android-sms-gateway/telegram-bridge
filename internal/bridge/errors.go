@@ -11,4 +11,8 @@ import "errors"
 var (
 	// ErrNoChatID is returned when the forward target chat is not configured.
 	ErrNoChatID = errors.New("bridge: chat id is not configured")
+
+	// ErrMessageTooLong is returned when the sender and the fixed prefix leave
+	// no room for the SMS text inside Telegram's per-message limit.
+	ErrMessageTooLong = errors.New("bridge: sender leaves no room for the message")
 )
