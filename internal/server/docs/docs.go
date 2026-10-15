@@ -23,33 +23,9 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/example": {
-            "get": {
-                "description": "Returns a greeting message and example value",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "example"
-                ],
-                "summary": "Get example",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/example.Response"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/fiberfx.ErrorResponse"
-                        }
-                    }
-                }
-            },
+        "/webhook": {
             "post": {
-                "description": "Creates an example using the provided request payload",
+                "description": "Verifies the payload signature and forwards the message to Telegram",
                 "consumes": [
                     "application/json"
                 ],
@@ -57,17 +33,31 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "example"
+                    "webhook"
                 ],
-                "summary": "Create example",
+                "summary": "Receive SMSGate webhook",
                 "parameters": [
                     {
-                        "description": "Request payload",
+                        "type": "string",
+                        "description": "Hex HMAC-SHA256 signature of the raw body followed by the timestamp",
+                        "name": "X-Signature",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Unix timestamp (seconds) used in the signature; must be within 5 minutes of server time",
+                        "name": "X-Timestamp",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "SMSGate webhook payload",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/example.Request"
+                            "$ref": "#/definitions/webhook.Request"
                         }
                     }
                 ],
@@ -75,11 +65,17 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/example.Response"
+                            "$ref": "#/definitions/webhook.ForwardResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/fiberfx.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/fiberfx.ErrorResponse"
                         }
@@ -95,28 +91,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "example.Request": {
-            "type": "object",
-            "required": [
-                "value"
-            ],
-            "properties": {
-                "value": {
-                    "type": "string"
-                }
-            }
-        },
-        "example.Response": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "string"
-                }
-            }
-        },
         "fiberfx.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -126,6 +100,65 @@ const docTemplate = `{
                 "details": {},
                 "message": {
                     "type": "string"
+                }
+            }
+        },
+        "smsgateway.SmsReceivedPayload": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "description": "The content of the SMS message received.",
+                    "type": "string",
+                    "example": "Hello World!"
+                },
+                "messageId": {
+                    "description": "The unique identifier of the message.",
+                    "type": "string",
+                    "example": "PyDmBQZZXYmyxMwED8Fzy"
+                },
+                "phoneNumber": {
+                    "description": "The phone number of the sender (for incoming messages) or recipient (for outgoing messages).",
+                    "type": "string",
+                    "example": "+79990001234"
+                },
+                "receivedAt": {
+                    "description": "The timestamp when the SMS message was received.",
+                    "type": "string",
+                    "example": "2020-01-01T00:00:00Z"
+                },
+                "recipient": {
+                    "description": "The phone number of the message recipient.",
+                    "type": "string",
+                    "example": "+79990001234"
+                },
+                "sender": {
+                    "description": "The phone number of the message sender.",
+                    "type": "string",
+                    "example": "+79990001234"
+                },
+                "simNumber": {
+                    "description": "The SIM card number that sent or received the SMS.",
+                    "type": "integer",
+                    "example": 1
+                }
+            }
+        },
+        "webhook.ForwardResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "webhook.Request": {
+            "type": "object",
+            "required": [
+                "payload"
+            ],
+            "properties": {
+                "payload": {
+                    "$ref": "#/definitions/smsgateway.SmsReceivedPayload"
                 }
             }
         }
@@ -138,8 +171,8 @@ var SwaggerInfo = &swag.Spec{
 	Host:             "localhost:3000",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
-	Title:            "Project API",
-	Description:      "Project API documentation",
+	Title:            "Telegram Bridge API",
+	Description:      "Bridge between SMSGate webhooks and Telegram",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
