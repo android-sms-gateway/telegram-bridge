@@ -1,4 +1,9 @@
 @baseURL=http://localhost:3000
+@signingKey=change-me
+# Must be the current unix time in seconds: the server rejects timestamps more
+# than 5 minutes from its own clock. Recompute it and @signature before sending.
+@timestamp=1700000000
+@signature=3e0051f22c33d7c3a7eed6ed15b471cb8166e3e145d287d170d36b37de175eb4
 
 # ============================================================
 # 1. HEALTH
@@ -18,3 +23,61 @@ GET {{baseURL}}/health/startup HTTP/1.1
 
 ###
 GET {{baseURL}}/metrics HTTP/1.1
+
+# ============================================================
+# 2. WEBHOOK (SMSGate -> Telegram bridge)
+# ============================================================
+
+# Forward a received SMS to the configured Telegram chat.
+#
+# Auth = SMSGate payload signing (docs.sms-gate.app, Webhooks -> Payload
+# Signing): X-Signature is the hex HMAC-SHA256 of the raw request body
+# followed by the X-Timestamp value (unix seconds), keyed with the device
+# signing key (SMSGATE__WEBHOOK__SIGNING_KEY here). The server rejects a
+# timestamp more than 5 minutes from its own clock, so regenerate both values
+# for every run.
+#
+# Regenerating @timestamp and @signature for the sample body below:
+#
+#   1. Set @timestamp above to the current unix time in seconds:
+#
+#        date +%s
+#
+#   2. Save the exact JSON body (everything after the blank line in this
+#      request) to a file, e.g. webhook-body.json, with NO trailing newline.
+#   3. Compute:
+#
+#        printf '%s' "$(cat webhook-body.json)<timestamp>" \
+#          | openssl dgst -sha256 -hmac "change-me" \
+#          | awk '{print $NF}'
+#
+#   4. Paste the hex digest into @signature above. The timestamp in the body
+#      suffix must match @timestamp (the signature covers body+timestamp).
+#
+# An empty SMSGATE__WEBHOOK__SIGNING_KEY rejects every request with 401. The
+# body matches the SMSGate app webhook envelope (event sms:received); only
+# payload.sender (or the deprecated payload.phoneNumber) and payload.message
+# are read today. Any other event type (for example sms:sent) is rejected
+# with 400, and a body without an event field is still accepted.
+
+###
+POST {{baseURL}}/api/v1/webhook HTTP/1.1
+X-Signature: {{signature}}
+X-Timestamp: {{timestamp}}
+Content-Type: application/json
+
+{
+  "id": "Ey6ECgOkVVFjz3CL48B8C",
+  "webhookId": "LreFUt-Z3sSq0JufY9uWB",
+  "event": "sms:received",
+  "deviceId": "ffffffffceb0b1db0000018e937c815b",
+  "payload": {
+    "messageId": "abc123",
+    "sender": "6505551212",
+    "recipient": "+1234567890",
+    "simNumber": 1,
+    "phoneNumber": "6505551212",
+    "message": "Android is always a sweet treat!",
+    "receivedAt": "2024-06-22T15:46:11.000+07:00"
+  }
+}
