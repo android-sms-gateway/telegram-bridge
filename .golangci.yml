@@ -229,7 +229,7 @@ linters:
       # Default: [ switch ]
       check:
         - switch
-        - map
+        - mapliteral
 
     exhaustruct_v5:
       # List of regular expressions to match type names that should be skipped from checking.
@@ -264,7 +264,7 @@ linters:
         - ^github.com/golang-jwt/jwt/v5.+Claims$
         - ^github.com/invopop/jsonschema.Reflector$
         - ^github.com/mitchellh/mapstructure.DecoderConfig$
-        - ^github.com/mymmrac/telego.+Params$
+        - ^github.com/mymmrac/telego.+$
         - ^github.com/openai/openai-go/v3/shared\.ResponseFormatJSONSchemaJSONSchemaParam$
         - ^github.com/openai/openai-go/v3/shared\.ResponseFormatJSONSchemaParam$
         - ^github.com/openai/openai-go/v3\.ChatCompletionNewParams$
@@ -283,6 +283,7 @@ linters:
         - ^github.com/urfave/cli.v3.ArgumentBase$
         - ^github.com/urfave/cli.v3.Command$
         - ^github.com/urfave/cli.v3.FlagBase$
+        - ^github.com/urfave/cli.v3.+Flag$
         - ^github.com/valyala/fasthttp.Client$
         - ^golang.org/x/tools/go/analysis.Analyzer$
         - ^google.golang.org/protobuf/.+Options$
@@ -464,12 +465,15 @@ linters:
 
     wrapcheck:
       extra-ignore-sigs:
+        - .Exit(
         - .JSON(
+        - .NewError(
         - .Next(
         - .Send(
         - .SendStatus(
 
   exclusions:
+    generated: lax
     # Log a warning if an exclusion rule is unused.
     # Default: false
     warn-unused: true
@@ -500,8 +504,9 @@ linters:
           - dupl
           - err113
           - errcheck
-          - exhaustruct
+          - exhaustruct_v5
           - funlen
+          - gochecknoglobals
           - gocognit
           - goconst
           - gosec
