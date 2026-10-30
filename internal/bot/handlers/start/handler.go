@@ -3,12 +3,17 @@ package start
 import (
 	"fmt"
 
-	"github.com/capcom6/go-project-template/internal/bot/handler"
+	"github.com/android-sms-gateway/telegram-bridge/internal/bot/handler"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	"go.uber.org/zap"
 )
+
+// startText describes the bridge when a user interacts with the bot.
+const startText = "Telegram bridge for SMSGate is connected. " +
+	"Messages received from your SMSGate webhooks will be forwarded to this chat. " +
+	"Replies are coming soon."
 
 type Handler struct {
 	logger *zap.Logger
@@ -34,7 +39,7 @@ func (h *Handler) handleStart(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 
-	return h.reply(ctx, update.Message.Chat.ID, "Hello, "+update.Message.From.Username)
+	return h.reply(ctx, update.Message.Chat.ID, startText)
 }
 
 func (h *Handler) reply(ctx *th.Context, chatID int64, text string) error {

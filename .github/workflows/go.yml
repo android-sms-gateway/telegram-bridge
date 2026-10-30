@@ -12,6 +12,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - ".github/workflows/**"
   pull_request:
     branches: [master]
     paths:
@@ -19,6 +20,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - ".github/workflows/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -108,9 +110,21 @@ jobs:
       # step 5: run benchmark
       - name: Run benchmarks
         run: go test -run=^$ -bench=. -benchmem ./... | tee benchmark.txt
+        shell: bash
 
-      # step 6: upload benchmark
+      # step 6: detect whether the run produced any benchmark at all
+      - name: Check for benchmark results
+        id: bench
+        run: |
+          if grep -q '^Benchmark' benchmark.txt; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # step 7: upload benchmark (skipped while the repo has no benchmarks)
       - name: Upload benchmark results
+        if: steps.bench.outputs.has == 'true'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           # What benchmark tool the benchmark.txt came from
@@ -122,7 +136,7 @@ jobs:
           # Workflow will fail when an alert happens
           fail-on-alert: true
 
-      # step 7: persist updated benchmark history
+      # step 8: persist updated benchmark history
       - name: Save benchmark history
         if: always()
         uses: actions/cache/save@v4
