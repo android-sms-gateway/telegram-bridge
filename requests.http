@@ -55,10 +55,11 @@ GET {{baseURL}}/metrics HTTP/1.1
 #      suffix must match @timestamp (the signature covers body+timestamp).
 #
 # An empty SMSGATE__WEBHOOK__SIGNING_KEY rejects every request with 401. The
-# body matches the SMSGate app webhook envelope (event sms:received); only
+# body matches the SMSGate app webhook envelope (event sms:received). The
+# envelope identifiers (id, webhookId, deviceId) are logged with each delivery;
 # payload.sender (or the deprecated payload.phoneNumber) and payload.message
-# are read today. Any other event type (for example sms:sent) is rejected
-# with 400, and a body without an event field is rejected as well.
+# are forwarded to Telegram. Any other event type (for example sms:sent) is
+# rejected with 400, and a body without an event field is rejected as well.
 
 ###
 POST {{baseURL}}/api/v1/webhook HTTP/1.1

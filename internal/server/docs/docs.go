@@ -157,11 +157,20 @@ const docTemplate = `{
                 "payload"
             ],
             "properties": {
+                "deviceId": {
+                    "type": "string"
+                },
                 "event": {
+                    "type": "string"
+                },
+                "id": {
                     "type": "string"
                 },
                 "payload": {
                     "$ref": "#/definitions/smsgateway.SmsReceivedPayload"
+                },
+                "webhookId": {
+                    "type": "string"
                 }
             }
         }

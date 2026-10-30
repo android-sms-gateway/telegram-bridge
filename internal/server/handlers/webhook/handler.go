@@ -8,6 +8,7 @@ import (
 	"github.com/go-core-fx/fiberfx/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
 )
 
 const (
@@ -19,15 +20,19 @@ type Handler struct {
 	handler.Base
 
 	webhookSvc *webhook.Service
+
+	logger *zap.Logger
 }
 
 // New creates a new webhook HTTP handler.
-func New(webhookSvc *webhook.Service, validator *validator.Validate) handler.Handler {
+func New(webhookSvc *webhook.Service, validator *validator.Validate, logger *zap.Logger) handler.Handler {
 	return &Handler{
 		Base: handler.Base{
 			Validator: validator,
 		},
 		webhookSvc: webhookSvc,
+
+		logger: logger,
 	}
 }
 
@@ -54,6 +59,16 @@ func (h *Handler) Register(r fiber.Router) {
 //
 // Receive SMSGate webhook.
 func (h *Handler) post(c *fiber.Ctx, req *Request) error {
+	// Log every signature-verified delivery with the envelope identifiers so a
+	// message can be traced back to its event, webhook and device. The payload
+	// itself is never logged: only its message ID.
+	h.logger.Info("webhook received",
+		zap.String("event", req.Event),
+		zap.String("event_id", req.ID),
+		zap.String("webhook_id", req.WebhookID),
+		zap.String("device_id", req.DeviceID),
+		zap.String("message_id", req.Payload.MessageID))
+
 	// The app sends the event type in the envelope. Only sms:received carries a
 	// received SMS, so the event must match exactly: any other value and a
 	// payload without the envelope event are rejected instead of forwarded.

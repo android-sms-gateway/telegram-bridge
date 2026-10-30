@@ -21,7 +21,9 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/mymmrac/telego"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const (
@@ -81,7 +83,7 @@ type fixture struct {
 // newFixture wires the full handler stack against a stub Telegram API server.
 // metrics must be shared across fixtures because promauto panics on duplicate
 // registration in the default registry.
-func newFixture(t *testing.T, signingKey string, m *webhook.Metrics) *fixture {
+func newFixture(t *testing.T, signingKey string, m *webhook.Metrics, logger *zap.Logger) *fixture {
 	t.Helper()
 
 	f := &fixture{
@@ -113,7 +115,7 @@ func newFixture(t *testing.T, signingKey string, m *webhook.Metrics) *fixture {
 
 	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, bot, zap.NewNop())
 	service := webhook.New(webhook.Config{SigningKey: signingKey}, forwarder, m, zap.NewNop())
-	handler := webhookhandler.New(service, validator.New())
+	handler := webhookhandler.New(service, validator.New(), logger)
 
 	f.app = fiber.New(fiber.Config{ErrorHandler: fiberfx.NewJSONErrorHandler(zap.NewNop())})
 	v1 := f.app.Group("/api/v1")
@@ -302,7 +304,7 @@ func TestHandlerPost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t, tt.signingKey, metrics)
+			f := newFixture(t, tt.signingKey, metrics, zap.NewNop())
 
 			req := httptest.NewRequest(fiber.MethodPost, "/api/v1/webhook", strings.NewReader(tt.body))
 			req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
@@ -349,6 +351,54 @@ func TestHandlerPost(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandlerPost_LogsEnvelopeIDs(t *testing.T) {
+	t.Parallel()
+
+	core, logs := observer.New(zap.InfoLevel)
+	f := newFixture(
+		t,
+		testSigningKey,
+		webhook.NewMetricsWithRegisterer(prometheus.NewRegistry()),
+		zap.New(core),
+	)
+
+	ts := timestampAt(time.Now())
+
+	req := httptest.NewRequest(fiber.MethodPost, "/api/v1/webhook", strings.NewReader(validBody))
+	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	req.Header.Set("X-Signature", sign(testSigningKey, validBody, ts))
+	req.Header.Set("X-Timestamp", ts)
+
+	resp, err := f.app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	entries := logs.FilterMessage("webhook received").All()
+	if len(entries) != 1 {
+		t.Fatalf("webhook received entries = %d, want 1", len(entries))
+	}
+
+	want := map[string]string{
+		"event":      "sms:received",
+		"event_id":   "event-id",
+		"webhook_id": "webhook-id",
+		"device_id":  "device-id",
+		"message_id": testMessageID,
+	}
+
+	got := entries[0].ContextMap()
+	for key, wantValue := range want {
+		if gotValue, ok := got[key]; !ok || gotValue != wantValue {
+			t.Fatalf("%s = %v, want %q", key, gotValue, wantValue)
+		}
 	}
 }
 
