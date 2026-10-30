@@ -8,6 +8,17 @@ import (
 	"github.com/go-core-fx/config"
 )
 
+// Raw koanf fields for every configuration section. Module-owned values are
+// mapped from here in module.go and reach their consumer as the bare value
+// that consumer takes.
+// Sections without a module yet (storage) stay raw until their wave-2 modules
+// are created.
+//
+// Every section mirrors exactly one runtime owner: telegram carries only
+// telegofx infrastructure and becomes telegofx.Config field by field; bridge
+// carries only the forward target and becomes bridge.Config; cache carries the
+// cachefx backend and becomes cachefx.Config; smsgate.webhook nests under the
+// SMSGate integration it authenticates.
 type http struct {
 	Address     string   `koanf:"address"`
 	ProxyHeader string   `koanf:"proxy_header"`
@@ -22,32 +33,61 @@ type openAPIConfig struct {
 	PublicPath string `koanf:"public_path"`
 }
 
-type telegram struct {
-	Token string `koanf:"token"`
+// telegramConfig is the telegofx infrastructure surface only. The token and the
+// SOCKS5 proxy dialer are both owned by telegofx and reach it unchanged as
+// telegofx.Config fields (see module.go); where a forwarded message is
+// delivered is not a Telegram client setting and lives in bridgeConfig.
+type telegramConfig struct {
+	Token    string `koanf:"token"`
+	ProxyURL string `koanf:"proxy_url"`
 }
 
-type databaseConfig struct {
-	URL             string        `koanf:"url"`
-	ConnMaxIdleTime time.Duration `koanf:"conn_max_idle_time"`
-	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime"`
-	MaxOpenConns    int           `koanf:"max_open_conns"`
-	MaxIdleConns    int           `koanf:"max_idle_conns"`
+// bridgeConfig is the bridge-domain surface: the single forward target of the
+// SMSGate -> Telegram bridge. It reaches internal/bridge as
+// bridge.Config{ChatID} (see module.go).
+type bridgeConfig struct {
+	ChatID int64 `koanf:"chat_id"`
 }
 
-type exampleConfig struct {
-	Example string `koanf:"example"`
+// webhookConfig is the inbound webhook surface of the SMSGate integration, so
+// it nests under smsgate. Only its signing key is read, and it reaches the
+// webhook service as a plain string (see module.go).
+type webhookConfig struct {
+	SigningKey string `koanf:"signing_key"`
+}
+
+type smsgateConfig struct {
+	BaseURL  string `koanf:"base_url"`
+	Username string `koanf:"username"`
+	Password string `koanf:"password"`
+
+	Webhook webhookConfig `koanf:"webhook"`
+}
+
+// cacheConfig is the cachefx backend surface. Every module creates its own
+// named cache through the application factory; the URL selects the backend
+// (memory:// or redis://) and the sweep interval bounds how long expired
+// entries stay resident.
+type cacheConfig struct {
+	URL           string        `koanf:"url"`
+	SweepInterval time.Duration `koanf:"sweep_interval"`
+}
+
+type storageConfig struct {
+	URL string `koanf:"url"`
 }
 
 type Config struct {
 	HTTP     http           `koanf:"http"`
-	Telegram telegram       `koanf:"telegram"`
-	Database databaseConfig `koanf:"database"`
+	Telegram telegramConfig `koanf:"telegram"`
+	Bridge   bridgeConfig   `koanf:"bridge"`
+	Cache    cacheConfig    `koanf:"cache"`
 
-	Example exampleConfig `koanf:"example"`
+	SMSGate smsgateConfig `koanf:"smsgate"`
+	Storage storageConfig `koanf:"storage"`
 }
 
 func Default() Config {
-	//nolint:gosec // default values
 	return Config{
 		HTTP: http{
 			Address:     "127.0.0.1:3000",
@@ -59,19 +99,28 @@ func Default() Config {
 				PublicPath: "",
 			},
 		},
-		Telegram: telegram{
-			Token: "",
+		Telegram: telegramConfig{
+			Token:    "",
+			ProxyURL: "",
 		},
-		Database: databaseConfig{
-			URL:             "mariadb://example:example@127.0.0.1:3306/example?charset=utf8mb4&parseTime=True&loc=UTC",
-			ConnMaxIdleTime: 0,
-			ConnMaxLifetime: 0,
-			MaxOpenConns:    0,
-			MaxIdleConns:    0,
+		Bridge: bridgeConfig{
+			ChatID: 0,
+		},
+		Cache: cacheConfig{
+			URL:           "memory://",
+			SweepInterval: time.Minute,
 		},
 
-		Example: exampleConfig{
-			Example: "example",
+		SMSGate: smsgateConfig{
+			BaseURL:  "",
+			Username: "",
+			Password: "",
+			Webhook: webhookConfig{
+				SigningKey: "",
+			},
+		},
+		Storage: storageConfig{
+			URL: "bolt://data/telegram-bridge.db",
 		},
 	}
 }
