@@ -10,11 +10,13 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx/cache"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,6 +33,7 @@ const (
 	testChatID     int64 = 123456789
 	testSender           = "6505551212"
 	testMessage          = "hello"
+	testEventKey         = "webhook-id:event-id"
 )
 
 // timestampAt formats t as the Unix-seconds X-Timestamp value.
@@ -68,14 +71,28 @@ func newTestBot(t *testing.T, apiURL string) *telegofx.Bot {
 func newTelegramStub(t *testing.T, status int) *httptest.Server {
 	t.Helper()
 
+	server, _ := newCountingTelegramStub(t, status)
+
+	return server
+}
+
+// newCountingTelegramStub starts a Telegram API stub answering sendMessage
+// calls and returns a counter of the calls it received.
+func newCountingTelegramStub(t *testing.T, status int) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	var calls atomic.Int64
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
 	}))
 	t.Cleanup(server.Close)
 
-	return server
+	return server, &calls
 }
 
 // counterValue reads the current value of one total counter label.
@@ -209,7 +226,13 @@ func TestService_Verify(t *testing.T) {
 			t.Parallel()
 
 			metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
-			service := webhook.New(webhook.Config{SigningKey: tt.signingKey}, nil, metrics, zap.NewNop())
+			service := webhook.New(
+				webhook.Config{SigningKey: tt.signingKey},
+				nil,
+				cache.NewMemory(0),
+				metrics,
+				zap.NewNop(),
+			)
 
 			err := service.Verify([]byte(tt.body), tt.signature, tt.timestamp)
 			if tt.wantErr {
@@ -279,9 +302,15 @@ func TestService_Forward(t *testing.T) {
 			metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
 			stub := newTelegramStub(t, tt.stubStatus)
 			forwarder := bridge.New(bridge.Config{ChatID: tt.chatID}, newTestBot(t, stub.URL), zap.NewNop())
-			service := webhook.New(webhook.Config{SigningKey: testSigningKey}, forwarder, metrics, zap.NewNop())
+			service := webhook.New(
+				webhook.Config{SigningKey: testSigningKey},
+				forwarder,
+				cache.NewMemory(0),
+				metrics,
+				zap.NewNop(),
+			)
 
-			err := service.Forward(context.Background(), testSender, testMessage)
+			err := service.Forward(context.Background(), testEventKey, testSender, testMessage)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("Forward() error = nil, want error")
@@ -302,5 +331,73 @@ func TestService_Forward(t *testing.T) {
 				t.Fatalf("forward_errors counter = %v, want %v", got, tt.wantForwardErrs)
 			}
 		})
+	}
+}
+
+// TestService_Forward_Deduplicates checks that a second delivery with the same
+// event key is skipped and counted as a duplicate.
+func TestService_Forward_Deduplicates(t *testing.T) {
+	t.Parallel()
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	stub, calls := newCountingTelegramStub(t, http.StatusOK)
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		cache.NewMemory(0),
+		metrics,
+		zap.NewNop(),
+	)
+
+	ctx := context.Background()
+
+	if err := service.Forward(ctx, testEventKey, testSender, testMessage); err != nil {
+		t.Fatalf("first Forward() error = %v", err)
+	}
+
+	if err := service.Forward(ctx, testEventKey, testSender, testMessage); err != nil {
+		t.Fatalf("duplicate Forward() error = %v, want nil", err)
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("telegram calls = %d, want 1", got)
+	}
+
+	if got := counterValue(metrics, "ok"); got != 1 {
+		t.Fatalf("ok counter = %v, want 1", got)
+	}
+
+	if got := counterValue(metrics, "duplicate"); got != 1 {
+		t.Fatalf("duplicate counter = %v, want 1", got)
+	}
+}
+
+// TestService_Forward_ReleasesEventOnForwardError checks that a failed forward
+// removes the dedup marker, so a later retry of the same event is not
+// suppressed.
+func TestService_Forward_ReleasesEventOnForwardError(t *testing.T) {
+	t.Parallel()
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	stub := newTelegramStub(t, http.StatusInternalServerError)
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	eventCache := cache.NewMemory(0)
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		eventCache,
+		metrics,
+		zap.NewNop(),
+	)
+
+	ctx := context.Background()
+
+	if err := service.Forward(ctx, testEventKey, testSender, testMessage); err == nil {
+		t.Fatal("Forward() error = nil, want error")
+	}
+
+	if _, err := eventCache.Get(ctx, testEventKey); !errors.Is(err, cache.ErrKeyNotFound) {
+		t.Fatalf("event marker still present after failed forward, Get() error = %v", err)
 	}
 }
