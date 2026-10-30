@@ -60,6 +60,10 @@ GET {{baseURL}}/metrics HTTP/1.1
 # payload.sender (or the deprecated payload.phoneNumber) and payload.message
 # are forwarded to Telegram. Any other event type (for example sms:sent) is
 # rejected with 400, and a body without an event field is rejected as well.
+#
+# The envelope id is required. Deliveries are de-duplicated by webhookId + id,
+# so repeating this exact request within the 24-hour dedup window returns
+# {"status":"ok"} without a second Telegram message.
 
 ###
 POST {{baseURL}}/api/v1/webhook HTTP/1.1

@@ -12,6 +12,7 @@ import (
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/server/middleware/signature"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx/cache"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/gofiber/fiber/v2"
 	"github.com/prometheus/client_golang/prometheus"
@@ -158,6 +159,7 @@ func TestSignatureMiddleware(t *testing.T) {
 			service := webhook.New(
 				webhook.Config{SigningKey: tt.signingKey},
 				nil,
+				cache.NewMemory(0),
 				metrics,
 				zap.NewNop(),
 			)

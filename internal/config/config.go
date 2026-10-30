@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/go-core-fx/config"
 )
@@ -15,8 +16,9 @@ import (
 //
 // Every section mirrors exactly one runtime owner: telegram carries only
 // telegofx infrastructure and becomes telegofx.Config field by field; bridge
-// carries only the forward target and becomes bridge.Config; smsgate.webhook
-// nests under the SMSGate integration it authenticates.
+// carries only the forward target and becomes bridge.Config; cache carries the
+// cachefx backend and becomes cachefx.Config; smsgate.webhook nests under the
+// SMSGate integration it authenticates.
 type http struct {
 	Address     string   `koanf:"address"`
 	ProxyHeader string   `koanf:"proxy_header"`
@@ -62,6 +64,15 @@ type smsgateConfig struct {
 	Webhook webhookConfig `koanf:"webhook"`
 }
 
+// cacheConfig is the cachefx backend surface. Every module creates its own
+// named cache through the application factory; the URL selects the backend
+// (memory:// or redis://) and the sweep interval bounds how long expired
+// entries stay resident.
+type cacheConfig struct {
+	URL           string        `koanf:"url"`
+	SweepInterval time.Duration `koanf:"sweep_interval"`
+}
+
 type storageConfig struct {
 	URL string `koanf:"url"`
 }
@@ -70,6 +81,7 @@ type Config struct {
 	HTTP     http           `koanf:"http"`
 	Telegram telegramConfig `koanf:"telegram"`
 	Bridge   bridgeConfig   `koanf:"bridge"`
+	Cache    cacheConfig    `koanf:"cache"`
 
 	SMSGate smsgateConfig `koanf:"smsgate"`
 	Storage storageConfig `koanf:"storage"`
@@ -93,6 +105,10 @@ func Default() Config {
 		},
 		Bridge: bridgeConfig{
 			ChatID: 0,
+		},
+		Cache: cacheConfig{
+			URL:           "memory://",
+			SweepInterval: time.Minute,
 		},
 
 		SMSGate: smsgateConfig{

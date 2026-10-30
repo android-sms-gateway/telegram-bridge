@@ -15,6 +15,7 @@ import (
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	webhookhandler "github.com/android-sms-gateway/telegram-bridge/internal/server/handlers/webhook"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx/cache"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/fiberfx/validation"
 	"github.com/go-core-fx/telegofx"
@@ -48,6 +49,16 @@ const (
 		`","sender":"` + testSender + `","recipient":"+1234567890","simNumber":1,` +
 		`"phoneNumber":"` + testSender + `","message":"` + testMessage + `",` +
 		`"receivedAt":"2024-06-22T15:46:11.000+07:00"}}`
+
+	// bodyWithoutID is the same envelope without the delivery id.
+	bodyWithoutID = `{"webhookId":"webhook-id","event":"sms:received",` +
+		`"deviceId":"device-id","payload":{"messageId":"` + testMessageID +
+		`","sender":"` + testSender + `","message":"` + testMessage + `"}}`
+
+	// legacyBody exercises the deprecated phoneNumber alias. It still carries a
+	// delivery id, which is required for de-duplication.
+	legacyBody = `{"id":"legacy-event-id","webhookId":"webhook-id","event":"sms:received",` +
+		`"payload":{"phoneNumber":"` + testSender + `","message":"legacy"}}`
 )
 
 // timestampAt formats t as the Unix-seconds X-Timestamp value.
@@ -114,7 +125,13 @@ func newFixture(t *testing.T, signingKey string, m *webhook.Metrics, logger *zap
 	}
 
 	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, bot, zap.NewNop())
-	service := webhook.New(webhook.Config{SigningKey: signingKey}, forwarder, m, zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: signingKey},
+		forwarder,
+		cache.NewMemory(0),
+		m,
+		zap.NewNop(),
+	)
 	handler := webhookhandler.New(service, validator.New(), logger)
 
 	f.app = fiber.New(fiber.Config{ErrorHandler: fiberfx.NewJSONErrorHandler(zap.NewNop())})
@@ -239,13 +256,11 @@ func TestHandlerPost(t *testing.T) {
 			wantForward: false,
 		},
 		{
-			name:       "falls back to deprecated phone number",
-			signingKey: testSigningKey,
-			signature: sign(testSigningKey,
-				`{"event":"sms:received","payload":{"phoneNumber":"`+testSender+`","message":"legacy"}}`, ts,
-			),
+			name:        "falls back to deprecated phone number",
+			signingKey:  testSigningKey,
+			signature:   sign(testSigningKey, legacyBody, ts),
 			timestamp:   ts,
-			body:        `{"event":"sms:received","payload":{"phoneNumber":"` + testSender + `","message":"legacy"}}`,
+			body:        legacyBody,
 			wantStatus:  fiber.StatusOK,
 			wantPhone:   testSender,
 			wantForward: true,
@@ -279,6 +294,16 @@ func TestHandlerPost(t *testing.T) {
 			signature:   sign(testSigningKey, `{"event":"sms:received"}`, ts),
 			timestamp:   ts,
 			body:        `{"event":"sms:received"}`,
+			wantStatus:  fiber.StatusBadRequest,
+			wantPhone:   "",
+			wantForward: false,
+		},
+		{
+			name:        "missing event id",
+			signingKey:  testSigningKey,
+			signature:   sign(testSigningKey, bodyWithoutID, ts),
+			timestamp:   ts,
+			body:        bodyWithoutID,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
 			wantForward: false,
@@ -400,6 +425,98 @@ func TestHandlerPost_LogsEnvelopeIDs(t *testing.T) {
 			t.Fatalf("%s = %v, want %q", key, gotValue, wantValue)
 		}
 	}
+}
+
+// TestHandlerPost_DeduplicatesEventID checks that a redelivery of the same
+// envelope id is acknowledged without a second Telegram forward.
+func TestHandlerPost_DeduplicatesEventID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(
+		t,
+		testSigningKey,
+		webhook.NewMetricsWithRegisterer(prometheus.NewRegistry()),
+		zap.NewNop(),
+	)
+
+	ts := timestampAt(time.Now())
+
+	resp := postWebhook(t, f, validBody, ts)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("first status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	select {
+	case <-f.sent:
+	default:
+		t.Fatal("expected a Telegram forward for the first delivery")
+	}
+
+	resp = postWebhook(t, f, validBody, ts)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("duplicate status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	select {
+	case got := <-f.sent:
+		t.Fatalf("unexpected Telegram forward for the duplicate: %+v", got)
+	default:
+	}
+}
+
+// TestHandlerPost_DifferentEventIDsForward checks that a new envelope id is
+// not suppressed by an earlier delivery.
+func TestHandlerPost_DifferentEventIDsForward(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(
+		t,
+		testSigningKey,
+		webhook.NewMetricsWithRegisterer(prometheus.NewRegistry()),
+		zap.NewNop(),
+	)
+
+	ts := timestampAt(time.Now())
+	otherBody := strings.Replace(validBody, `"id":"event-id"`, `"id":"event-id-2"`, 1)
+
+	resp := postWebhook(t, f, validBody, ts)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("first status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	select {
+	case <-f.sent:
+	default:
+		t.Fatal("expected a Telegram forward for the first delivery")
+	}
+
+	resp = postWebhook(t, f, otherBody, ts)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("second status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	select {
+	case <-f.sent:
+	default:
+		t.Fatal("expected a Telegram forward for the second delivery")
+	}
+}
+
+// postWebhook sends a signed webhook request through the fixture app.
+func postWebhook(t *testing.T, f *fixture, body, ts string) *http.Response {
+	t.Helper()
+
+	req := httptest.NewRequest(fiber.MethodPost, "/api/v1/webhook", strings.NewReader(body))
+	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	req.Header.Set("X-Signature", sign(testSigningKey, body, ts))
+	req.Header.Set("X-Timestamp", ts)
+
+	resp, err := f.app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+
+	return resp
 }
 
 // extractMessage pulls the SMS text out of a request body for the expected

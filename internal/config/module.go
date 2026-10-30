@@ -3,6 +3,7 @@ package config
 import (
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/fiberfx/openapi"
 	"github.com/go-core-fx/telegofx"
@@ -14,11 +15,12 @@ import (
 // library config as-is; the bridge-domain settings are mapped to the module
 // config their own module consumes.
 //
-//	fiberfx.Config                  <- http.*                        -> fiberfx
-//	openapi.Config                  <- http.openapi.*                -> openapi
-//	telegofx.Config                 <- telegram.token, telegram.proxy -> telegofx.New
-//	bridge.Config                   <- bridge.chat_id                -> bridge.New
-//	webhook.Config                  <- smsgate.webhook.signing_key   -> webhook.New
+//	fiberfx.Config                  <- http.*                          -> fiberfx
+//	openapi.Config                  <- http.openapi.*                  -> openapi
+//	telegofx.Config                 <- telegram.token, telegram.proxy  -> telegofx.New
+//	bridge.Config                   <- bridge.chat_id                  -> bridge.New
+//	cachefx.Config                  <- cache.url, cache.sweep_interval -> cachefx.NewFactory
+//	webhook.Config                  <- smsgate.webhook.signing_key     -> webhook.New
 //
 // No bare primitives (int64, string, ...) are provided: fx would then have no
 // way to tell two values of the same type apart.
@@ -62,6 +64,15 @@ func Module() fx.Option {
 					// Zero is "not configured": bridge.Service.Forward then fails
 					// with bridge.ErrNoChatID instead of sending to an unknown chat.
 					ChatID: cfg.Bridge.ChatID,
+				}
+			},
+			func(cfg Config) cachefx.Config {
+				// The cache section selects the cachefx backend. The default
+				// memory:// keeps cache state in-process; redis:// shares it
+				// across replicas.
+				return cachefx.Config{
+					URL:           cfg.Cache.URL,
+					SweepInterval: cfg.Cache.SweepInterval,
 				}
 			},
 			func(cfg Config) webhook.Config {

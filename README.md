@@ -77,6 +77,7 @@ What it does:
 
 * **Webhook ingest** — receives SMSGate app webhooks at `POST /api/v1/webhook`.
 * **Signature verification** — authenticates every request with an HMAC-SHA256 signature and rejects requests whose timestamp falls outside a 5-minute window. The window narrows but does not eliminate replay; delivery is at-least-once. An empty signing key rejects everything.
+* **Event de-duplication** — a redelivered event is acknowledged but not forwarded twice. Deliveries are keyed by webhook id and event id, and the marker lives for 24 hours in the configured cache backend.
 * **Telegram delivery** — forwards the sender number and message text to a configured Telegram chat, escaping the content and splitting messages that exceed Telegram's length limit.
 * **Webhook event filtering** — accepts only the `sms:received` event; any other event type or a payload without an `event` field is rejected with 400.
 * **Operations endpoints** — liveness, readiness and startup health checks, Prometheus metrics, and a Swagger UI for the API.
@@ -184,7 +185,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
   }'
 ```
 
-On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. See `requests.http` for a ready-to-run example, including how to compute the signature.
+On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. A redelivery of the same envelope `id` also replies `{"status":"ok"}` but is skipped instead of forwarded again; the marker is kept for 24 hours. See `requests.http` for a ready-to-run example, including how to compute the signature.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -203,6 +204,8 @@ The settings you will most likely change:
 | `TELEGRAM__PROXY_URL`           | SOCKS5 proxy for Telegram API traffic (`socks5://` or `socks5h://`). | *(empty)*        |
 | `HTTP__ADDRESS`                 | Address the HTTP server binds to.                                    | `127.0.0.1:3000` |
 | `HTTP__OPENAPI__ENABLED`        | Serve the Swagger UI and API document under `/api/v1/docs`.          | `true`           |
+| `CACHE__URL`                    | Dedup cache backend: `memory://` (per-process) or `redis://`.        | `memory://`      |
+| `CACHE__SWEEP_INTERVAL`         | How often expired cache entries are evicted. Must be positive.       | `1m`             |
 | `CONFIG_PATH`                   | Path to an optional YAML configuration file.                         | *(empty)*        |
 
 Notes:

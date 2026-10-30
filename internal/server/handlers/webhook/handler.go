@@ -44,7 +44,7 @@ func (h *Handler) Register(r fiber.Router) {
 }
 
 //	@Summary		Receive SMSGate webhook
-//	@Description	Verifies the payload signature and forwards the message to Telegram. Only the sms:received event is accepted.
+//	@Description	Verifies the payload signature, de-duplicates the event by envelope id, and forwards the message to Telegram. Only the sms:received event is accepted.
 //	@Tags			webhook
 //	@Accept			json
 //	@Produce		json
@@ -88,7 +88,11 @@ func (h *Handler) post(c *fiber.Ctx, req *Request) error {
 		return fiber.NewError(fiber.StatusBadRequest, "sender and message are required")
 	}
 
-	if err := h.webhookSvc.Forward(c.Context(), phoneNumber, req.Payload.Message); err != nil {
+	// The webhook id scopes the event id: the same event id delivered through a
+	// different webhook is a different delivery.
+	eventKey := req.WebhookID + ":" + req.ID
+
+	if err := h.webhookSvc.Forward(c.Context(), eventKey, phoneNumber, req.Payload.Message); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to forward message")
 	}
 

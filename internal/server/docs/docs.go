@@ -25,7 +25,7 @@ const docTemplate = `{
     "paths": {
         "/webhook": {
             "post": {
-                "description": "Verifies the payload signature and forwards the message to Telegram. Only the sms:received event is accepted.",
+                "description": "Verifies the payload signature, de-duplicates the event by envelope id, and forwards the message to Telegram. Only the sms:received event is accepted.",
                 "consumes": [
                     "application/json"
                 ],
@@ -154,6 +154,7 @@ const docTemplate = `{
         "webhook.Request": {
             "type": "object",
             "required": [
+                "id",
                 "payload"
             ],
             "properties": {
@@ -164,7 +165,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                 },
                 "payload": {
                     "$ref": "#/definitions/smsgateway.SmsReceivedPayload"
