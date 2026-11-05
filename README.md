@@ -177,6 +177,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
   -H "X-Signature: <hex-signature>" \
   -H "X-Timestamp: <unix-seconds>" \
   -d '{
+    "id": "event-id-1",
+    "webhookId": "webhook-1",
     "event": "sms:received",
     "payload": {
       "sender": "6505551212",
@@ -211,6 +213,7 @@ The settings you will most likely change:
 Notes:
 
 * Keys use `__` to separate nesting levels, and key matching is case-insensitive.
+* `CACHE__URL=redis://` requires Redis 7.4 or newer: the de-duplication markers rely on hash-field TTLs, which earlier Redis versions do not support.
 * `TELEGRAM__TOKEN` and `SMSGATE__WEBHOOK__SIGNING_KEY` are secrets — keep them out of version control.
 * `CONFIG_PATH`, `DEBUG` and `TZ` are read directly from the process environment, so set them in your shell rather than in `.env`.
 
