@@ -46,7 +46,7 @@ const (
 		`"receivedAt":"2024-06-22T15:46:11.000+07:00"}}`
 
 	// bodyWithoutEvent is the same payload without the envelope event field.
-	bodyWithoutEvent = `{"payload":{"messageId":"` + testMessageID +
+	bodyWithoutEvent = `{"id":"event-id","payload":{"messageId":"` + testMessageID +
 		`","sender":"` + testSender + `","recipient":"+1234567890","simNumber":1,` +
 		`"phoneNumber":"` + testSender + `","message":"` + testMessage + `",` +
 		`"receivedAt":"2024-06-22T15:46:11.000+07:00"}}`
@@ -249,10 +249,10 @@ func TestHandlerPost(t *testing.T) {
 			name:       "unsupported event is rejected",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"event":"sms:sent","payload":{"sender":"`+testSender+`","message":"hi"}}`, ts,
+				`{"id":"event-id","event":"sms:sent","payload":{"sender":"`+testSender+`","message":"hi"}}`, ts,
 			),
 			timestamp:   ts,
-			body:        `{"event":"sms:sent","payload":{"sender":"` + testSender + `","message":"hi"}}`,
+			body:        `{"id":"event-id","event":"sms:sent","payload":{"sender":"` + testSender + `","message":"hi"}}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
 			wantForward: false,
@@ -281,21 +281,22 @@ func TestHandlerPost(t *testing.T) {
 			name:       "missing message",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"event":"sms:received","payload":{"sender":"`+testSender+`"}}`, ts,
+				`{"id":"event-id","event":"sms:received","payload":{"sender":"`+testSender+`"}}`, ts,
 			),
 			timestamp:   ts,
-			body:        `{"event":"sms:received","payload":{"sender":"` + testSender + `"}}`,
+			body:        `{"id":"event-id","event":"sms:received","payload":{"sender":"` + testSender + `"}}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
 			wantForward: false,
-		}, {
+		},
+		{
 			name:       "missing phone number",
 			signingKey: testSigningKey,
 			signature: sign(testSigningKey,
-				`{"event":"sms:received","payload":{"message":"hi"}}`, ts,
+				`{"id":"event-id","event":"sms:received","payload":{"message":"hi"}}`, ts,
 			),
 			timestamp:   ts,
-			body:        `{"event":"sms:received","payload":{"message":"hi"}}`,
+			body:        `{"id":"event-id","event":"sms:received","payload":{"message":"hi"}}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
 			wantForward: false,
@@ -303,9 +304,9 @@ func TestHandlerPost(t *testing.T) {
 		{
 			name:        "missing payload",
 			signingKey:  testSigningKey,
-			signature:   sign(testSigningKey, `{"event":"sms:received"}`, ts),
+			signature:   sign(testSigningKey, `{"id":"event-id","event":"sms:received"}`, ts),
 			timestamp:   ts,
-			body:        `{"event":"sms:received"}`,
+			body:        `{"id":"event-id","event":"sms:received"}`,
 			wantStatus:  fiber.StatusBadRequest,
 			wantPhone:   "",
 			wantForward: false,
