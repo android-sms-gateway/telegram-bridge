@@ -63,7 +63,8 @@ GET {{baseURL}}/metrics HTTP/1.1
 #
 # The envelope id is required. Deliveries are de-duplicated by webhookId + id,
 # so repeating this exact request within the 24-hour dedup window returns
-# {"status":"ok"} without a second Telegram message.
+# {"status":"ok"} without a second Telegram message. A repeat sent while the
+# first delivery is still running returns 503 and should be retried.
 
 ###
 POST {{baseURL}}/api/v1/webhook HTTP/1.1

@@ -1,6 +1,8 @@
 package webhook
 
 import (
+	"errors"
+
 	"github.com/android-sms-gateway/client-go/smsgateway"
 	"github.com/android-sms-gateway/telegram-bridge/internal/server/middleware/signature"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
@@ -55,6 +57,7 @@ func (h *Handler) Register(r fiber.Router) {
 //	@Failure		400			{object}	fiberfx.ErrorResponse
 //	@Failure		401			{object}	fiberfx.ErrorResponse
 //	@Failure		500			{object}	fiberfx.ErrorResponse
+//	@Failure		503			{object}	fiberfx.ErrorResponse
 //	@Router			/webhook [post]
 //
 // Receive SMSGate webhook.
@@ -93,6 +96,14 @@ func (h *Handler) post(c *fiber.Ctx, req *Request) error {
 	eventKey := req.WebhookID + ":" + req.ID
 
 	if err := h.webhookSvc.Forward(c.Context(), eventKey, phoneNumber, req.Payload.Message); err != nil {
+		// An in-flight duplicate is not a forward failure: the same event is
+		// already being delivered, so answer with a retryable status instead
+		// of reporting an error the sender cannot distinguish from a lost
+		// Telegram call.
+		if errors.Is(err, webhook.ErrEventInFlight) {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "event delivery already in progress")
+		}
+
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to forward message")
 	}
 

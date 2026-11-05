@@ -187,7 +187,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
   }'
 ```
 
-On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. A redelivery of the same envelope `id` also replies `{"status":"ok"}` but is skipped instead of forwarded again; the marker is kept for 24 hours. See `requests.http` for a ready-to-run example, including how to compute the signature.
+On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. A redelivery of the same envelope `id` also replies `{"status":"ok"}` but is skipped instead of forwarded again; the marker is kept for 24 hours. A redelivery that arrives while the first delivery is still running is answered with `503` so the sender retries later. See `requests.http` for a ready-to-run example, including how to compute the signature.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

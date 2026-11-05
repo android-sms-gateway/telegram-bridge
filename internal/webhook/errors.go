@@ -13,4 +13,11 @@ var (
 	// ErrInvalidSignature is returned when the request has no signature, no
 	// timestamp, or the signature does not match the configured signing key.
 	ErrInvalidSignature = errors.New("webhook: missing or invalid signature")
+
+	// ErrEventInFlight is returned when a delivery of the same event id is
+	// already running: the de-duplication claim is still pending, so the
+	// caller must retry instead of being told the event was already handled.
+	// The running delivery either completes (the retry becomes a skippable
+	// duplicate) or fails (the claim is released and the retry goes through).
+	ErrEventInFlight = errors.New("webhook: event delivery already in progress")
 )

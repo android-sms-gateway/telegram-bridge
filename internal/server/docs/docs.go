@@ -85,6 +85,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/fiberfx.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/fiberfx.ErrorResponse"
+                        }
                     }
                 }
             }

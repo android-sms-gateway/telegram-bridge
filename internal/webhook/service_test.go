@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,24 +68,59 @@ func newTestBot(t *testing.T, apiURL string) *telegofx.Bot {
 	return bot
 }
 
+// stubCtl makes a Telegram stub signal when it receives a call and wait
+// before answering, so a test can hold a forward in flight. Both channels are
+// optional; release is idempotent so a failing test cannot leave the stub
+// blocked past its cleanup.
+type stubCtl struct {
+	started chan struct{}
+	stall   chan struct{}
+	release func()
+}
+
+// newStubCtl builds a stubCtl that signals started once and blocks until the
+// returned release func is called.
+func newStubCtl() *stubCtl {
+	stall := make(chan struct{})
+	once := sync.Once{}
+
+	return &stubCtl{
+		started: make(chan struct{}, 1),
+		stall:   stall,
+		release: func() {
+			once.Do(func() { close(stall) })
+		},
+	}
+}
+
 // newTelegramStub starts a Telegram API stub answering sendMessage calls.
 func newTelegramStub(t *testing.T, status int) *httptest.Server {
 	t.Helper()
 
-	server, _ := newCountingTelegramStub(t, status)
+	server, _ := newCountingTelegramStub(t, status, nil)
 
 	return server
 }
 
 // newCountingTelegramStub starts a Telegram API stub answering sendMessage
-// calls and returns a counter of the calls it received.
-func newCountingTelegramStub(t *testing.T, status int) (*httptest.Server, *atomic.Int64) {
+// calls and returns a counter of the calls it received. When ctl is non-nil
+// the stub signals ctl.started and waits for ctl.release before answering.
+func newCountingTelegramStub(t *testing.T, status int, ctl *stubCtl) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 
 	var calls atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
+
+		if ctl != nil {
+			select {
+			case ctl.started <- struct{}{}:
+			default:
+			}
+
+			<-ctl.stall
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -340,7 +376,7 @@ func TestService_Forward_Deduplicates(t *testing.T) {
 	t.Parallel()
 
 	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
-	stub, calls := newCountingTelegramStub(t, http.StatusOK)
+	stub, calls := newCountingTelegramStub(t, http.StatusOK, nil)
 	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
 	service := webhook.New(
 		webhook.Config{SigningKey: testSigningKey},
@@ -399,5 +435,76 @@ func TestService_Forward_ReleasesEventOnForwardError(t *testing.T) {
 
 	if _, err := eventCache.Get(ctx, testEventKey); !errors.Is(err, cache.ErrKeyNotFound) {
 		t.Fatalf("event marker still present after failed forward, Get() error = %v", err)
+	}
+}
+
+// TestService_Forward_InFlightDuplicate checks that a redelivery arriving
+// while the first forward is still running is not acknowledged as delivered:
+// it returns ErrEventInFlight so the sender retries, and once the first
+// delivery completes the same redelivery becomes a skippable duplicate.
+func TestService_Forward_InFlightDuplicate(t *testing.T) {
+	t.Parallel()
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	ctl := newStubCtl()
+	defer ctl.release()
+
+	stub, calls := newCountingTelegramStub(t, http.StatusOK, ctl)
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		cache.NewMemory(0),
+		metrics,
+		zap.NewNop(),
+	)
+
+	ctx := context.Background()
+	firstErr := make(chan error, 1)
+
+	go func() {
+		firstErr <- service.Forward(ctx, testEventKey, testSender, testMessage)
+	}()
+
+	select {
+	case <-ctl.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first forward never reached Telegram")
+	}
+
+	err := service.Forward(ctx, testEventKey, testSender, testMessage)
+	if !errors.Is(err, webhook.ErrEventInFlight) {
+		t.Fatalf("in-flight Forward() error = %v, want ErrEventInFlight", err)
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("telegram calls while in flight = %d, want 1", got)
+	}
+
+	ctl.release()
+
+	select {
+	case err = <-firstErr:
+		if err != nil {
+			t.Fatalf("first Forward() error = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("first forward did not finish after release")
+	}
+
+	if err = service.Forward(ctx, testEventKey, testSender, testMessage); err != nil {
+		t.Fatalf("duplicate Forward() error = %v, want nil", err)
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("telegram calls = %d, want 1", got)
+	}
+
+	if got := counterValue(metrics, "duplicate"); got != 2 {
+		t.Fatalf("duplicate counter = %v, want 2", got)
+	}
+
+	if got := counterValue(metrics, "ok"); got != 1 {
+		t.Fatalf("ok counter = %v, want 1", got)
 	}
 }
