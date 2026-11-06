@@ -454,6 +454,7 @@ func TestHandlerPost_NoEnvelopeLogWithoutValidSignature(t *testing.T) {
 		testSigningKey,
 		webhook.NewMetricsWithRegisterer(prometheus.NewRegistry()),
 		zap.New(core),
+		nil,
 	)
 
 	ts := timestampAt(time.Now())
