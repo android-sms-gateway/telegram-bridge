@@ -21,6 +21,7 @@ import (
 
 	botconfig "github.com/android-sms-gateway/telegram-bridge/internal/bot/config"
 	replyhandler "github.com/android-sms-gateway/telegram-bridge/internal/bot/handlers/reply"
+	start "github.com/android-sms-gateway/telegram-bridge/internal/bot/handlers/start"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/smsgate"
 	"github.com/android-sms-gateway/telegram-bridge/internal/store"
@@ -237,9 +238,14 @@ func newHandlerFixture(t *testing.T, allowed []int64, responses ...smsResponse) 
 	// The allowlist reaches the handler the way the graph delivers it: the
 	// handler builds the filter of its route from the module config in its
 	// constructor, and the router applies it while the route is registered.
-	replyhandler.New(service, botconfig.Config{AllowedUserIDs: allowed}).Register(
-		&telegofx.Router{BotHandler: botHandler},
-	)
+	router := &telegofx.Router{BotHandler: botHandler}
+	replyhandler.New(service, botconfig.Config{AllowedUserIDs: allowed}).Register(router)
+
+	// The start route rides along the way the serve graph registers it: it takes
+	// no allowlist, so it answers every /start. Cases that expect no output use
+	// it as the control that proves the dispatcher consumed the update under
+	// test, see TestHandleReply_Allowlist.
+	start.New(zap.NewNop()).Register(router)
 
 	go func() {
 		if serr := botHandler.Start(); serr != nil && !strings.Contains(serr.Error(), "stopped") {
@@ -381,8 +387,11 @@ func TestHandleReply_UnresolvableTarget(t *testing.T) {
 // the SMS would be queued if the update ever reached the service, and the
 // handler answers every outcome in chat, so the chat would show a sentence.
 // Neither happens, which is what proves the update never entered the handler
-// rather than being refused inside it. An empty allowlist closes the route for
-// everyone.
+// rather than being refused inside it. Because telegohandler dispatches updates
+// in parallel goroutines, "neither happens" is not observable on its own: each
+// case follows the update under test with a /start control the start route
+// always answers, and reads the counts only once that answer has arrived. An
+// empty allowlist closes the route for everyone.
 func TestHandleReply_Allowlist(t *testing.T) {
 	t.Parallel()
 
@@ -417,16 +426,26 @@ func TestHandleReply_Allowlist(t *testing.T) {
 
 			f.deliver(t, updateJSON(tt.userID, testReplyText))
 
-			// Nothing at all is expected, so the wait is a grace period: any
-			// output of the handler would show up inside it.
+			// The control is a /start from the same user: the start route takes
+			// no allowlist, so it answers even when the reply route is closed.
+			// Waiting for its answer proves the dispatcher consumed the update
+			// under test before the counts are read; the grace afterwards gives
+			// a concurrently dispatched reply the chance to land, the same
+			// pattern TestHandleReply_IgnoresOtherMessages uses.
+			f.deliver(t, plainMessageJSON(tt.userID, "/start"))
+
+			waitFor(t, func() bool {
+				return f.telegram.count() >= 1 &&
+					strings.Contains(f.telegram.last().Text, "Telegram bridge for SMSGate")
+			}, "the /start control answer")
 			time.Sleep(graceInterval)
 
 			if got := f.sms.count(); got != 0 {
 				t.Fatalf("sms sends = %d, want 0 (the route filters the update)", got)
 			}
 
-			if got := f.telegram.count(); got != 0 {
-				t.Fatalf("chat messages = %d, want 0 (the route filters the update)", got)
+			if got := f.telegram.count(); got != 1 {
+				t.Fatalf("chat messages = %d, want 1 (only the /start control)", got)
 			}
 		})
 	}
@@ -639,18 +658,8 @@ func TestForwardThenReply(t *testing.T) {
 func TestForwardThenReplyExpiredMapping(t *testing.T) {
 	t.Parallel()
 
-	repo, _ := newRepo(t)
-
-	err := repo.Put(context.Background(), testChatID, testTGMessageID, store.Mapping{
-		Phone:     testPhone,
-		CreatedAt: time.Now().Add(-2 * time.Hour),
-		ExpiresAt: time.Now().Add(-time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("store mapping: %v", err)
-	}
-
 	f := newHandlerFixture(t, []int64{testAllowedID}, queued())
+	f.storeMapping(t, time.Now().Add(-time.Hour))
 
 	f.deliver(t, updateJSON(testAllowedID, testReplyText))
 

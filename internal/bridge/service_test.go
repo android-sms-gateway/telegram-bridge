@@ -695,7 +695,7 @@ func answer(text string) bridge.Answer {
 // TestReply_SendsToMappedSender covers the round trip of a single answer: an
 // allowed user answers a forwarded bubble, the answer leaves for the mapped
 // sender, and the outcome carries the id the SMSGate server assigned.
-func TestSend_SendsToMappedSender(t *testing.T) {
+func TestReply_SendsToMappedSender(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, queued())
@@ -725,7 +725,7 @@ func TestSend_SendsToMappedSender(t *testing.T) {
 // TestReply_ConflictWithoutMessageID asserts the placeholder carried when the
 // SMSGate server answers a conflict without an id: the operator is still told the
 // message was queued, and the chat never shows an empty id.
-func TestSend_ConflictWithoutMessageID(t *testing.T) {
+func TestReply_ConflictWithoutMessageID(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, conflict())
@@ -745,7 +745,7 @@ func TestSend_ConflictWithoutMessageID(t *testing.T) {
 
 // TestReply_EmptyText asserts a reply that carries no text (a photo, for example)
 // never leaves as an SMS.
-func TestSend_EmptyText(t *testing.T) {
+func TestReply_EmptyText(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, queued())
@@ -766,7 +766,7 @@ func TestSend_EmptyText(t *testing.T) {
 // TestReply_UnresolvableTarget asserts a reply to a message the bridge did not
 // forward, and a reply to a mapping that has expired, are both reported as an
 // unroutable target and never queued. The two are the same to the operator.
-func TestSend_UnresolvableTarget(t *testing.T) {
+func TestReply_UnresolvableTarget(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -812,7 +812,7 @@ func TestSend_UnresolvableTarget(t *testing.T) {
 // TestReply_LookupFailed asserts a mapping lookup that fails for any reason other
 // than a missing record is reported as its own outcome: the operator is told the
 // lookup failed, and nothing about the store reaches the outcome.
-func TestSend_LookupFailed(t *testing.T) {
+func TestReply_LookupFailed(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, queued())
@@ -838,7 +838,7 @@ func TestSend_LookupFailed(t *testing.T) {
 // TestReply_SendFailure asserts a refused send is reported as a send failure that
 // carries neither the sender number nor a server answer, and that the service
 // stays usable for the next reply.
-func TestSend_SendFailure(t *testing.T) {
+func TestReply_SendFailure(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, refused(), queued())
