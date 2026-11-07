@@ -90,8 +90,10 @@ func FormatForwardMessage(phoneNumber, message string) string {
 // Telegram made of every part it was split into.
 //
 // Messages too long for a single Telegram message are split into several
-// formatted messages; a failure on a later part returns an error after the
-// earlier parts have already been delivered.
+// formatted messages; a failure on a later part returns the earlier parts
+// together with the error, so the caller can store their reply mappings before
+// it reports the failure. A reply to a part Telegram already accepted must
+// resolve to the sender even though the forward as a whole failed.
 //
 // The delivered chats and message ids are the identity of the forward: the
 // reply path resolves them back to the SMS sender, so a reply to any part of a
@@ -117,7 +119,7 @@ func (s *Service) Forward(ctx context.Context, phoneNumber, message string) ([]F
 			ParseMode: telego.ModeHTML,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("forward: send telegram message: %w", err)
+			return forwarded, fmt.Errorf("forward: send telegram message: %w", err)
 		}
 
 		forwarded = append(forwarded, Forwarded{ChatID: s.chatID, MessageID: sent.MessageID})

@@ -78,6 +78,9 @@ func (s *Service) Verify(body []byte, signature, timestamp string) error {
 // After a successful delivery the reply mappings are written: the chat each
 // part went to plus the id Telegram gave it now resolve back to the sender,
 // which is what lets an answer to any part of the bubble leave as an SMS.
+// The same holds when a later part fails: the parts Telegram already accepted
+// are mapped before the error is reported, so a reply to them still resolves
+// to the sender even though the device is told the delivery failed.
 //
 // A mapping that cannot be written is logged and does not fail the request. The
 // SMS has already reached Telegram at that point, so answering with an error
@@ -86,6 +89,11 @@ func (s *Service) Verify(body []byte, signature, timestamp string) error {
 // unresolvable, which the reply path reports to the operator in chat.
 func (s *Service) Forward(ctx context.Context, phoneNumber, message string) error {
 	forwarded, err := s.bridge.Forward(ctx, phoneNumber, message)
+
+	for _, part := range forwarded {
+		s.storeMapping(ctx, part, phoneNumber)
+	}
+
 	if err != nil {
 		s.metrics.IncForwardErrors()
 		s.metrics.IncTotal(resultError)
@@ -93,10 +101,6 @@ func (s *Service) Forward(ctx context.Context, phoneNumber, message string) erro
 		s.logger.Error("forward failed", zap.Error(err))
 
 		return fmt.Errorf("webhook: forward: %w", err)
-	}
-
-	for _, part := range forwarded {
-		s.storeMapping(ctx, part, phoneNumber)
 	}
 
 	s.metrics.IncTotal(resultOK)
@@ -116,6 +120,14 @@ func (s *Service) Forward(ctx context.Context, phoneNumber, message string) erro
 // The mapping is written with a zero expiry: the store stamps expires_at from
 // its own TTL, so the retention of a mapping is the store's decision and not a
 // constant duplicated in this package.
+//
+// The write runs on a context detached from the request: the caller's context
+// is the fasthttp request context, which fasthttp cancels on server shutdown
+// while the request is still in flight. Telegram has already accepted the part
+// at this point, so the mapping must be written even then — a dropped write
+// would leave a delivered bubble with no sender to reply to, and the device
+// still gets its 200 either way. The write is a local bbolt put, so detaching
+// the cancellation cannot strand it on a remote call.
 func (s *Service) storeMapping(ctx context.Context, forwarded bridge.Forwarded, phoneNumber string) {
 	mapping := store.Mapping{
 		Phone:     phoneNumber,
@@ -123,7 +135,7 @@ func (s *Service) storeMapping(ctx context.Context, forwarded bridge.Forwarded, 
 		ExpiresAt: time.Time{},
 	}
 
-	if err := s.repo.Put(ctx, forwarded.ChatID, forwarded.MessageID, mapping); err != nil {
+	if err := s.repo.Put(context.WithoutCancel(ctx), forwarded.ChatID, forwarded.MessageID, mapping); err != nil {
 		s.logger.Error("reply mapping not stored, replies to this message cannot be routed",
 			zap.Error(err),
 			zap.Int64("chat_id", forwarded.ChatID),

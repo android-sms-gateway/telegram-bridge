@@ -276,6 +276,74 @@ func TestService_Forward(t *testing.T) {
 	}
 }
 
+// TestForwardReturnsDeliveredPartsOnPartialFailure asserts a failure on a later
+// chunk reports the parts Telegram already accepted: the caller stores reply
+// mappings for exactly those parts before it reports the error, so a reply to a
+// delivered part still resolves to the sender even though the forward as a
+// whole failed.
+func TestForwardReturnsDeliveredPartsOnPartialFailure(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	requests := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if n == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":707}}`))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"stub failure"}`))
+	}))
+	defer server.Close()
+
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	service := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		newTestBot(t, server.URL),
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+
+	// One character over the per-message budget guarantees a second chunk, so
+	// the second Telegram call is the one that fails.
+	forwarded, err := service.Forward(context.Background(), testSender, strings.Repeat("a", messageBudget()+1))
+	if err == nil {
+		t.Fatal("Forward() error = nil, want the failure of the second chunk")
+	}
+
+	if !strings.Contains(err.Error(), "send telegram message") {
+		t.Fatalf("Forward() error = %q, want the send failure", err)
+	}
+
+	if len(forwarded) != 1 {
+		t.Fatalf("delivered parts = %+v, want exactly the first chunk", forwarded)
+	}
+
+	if forwarded[0].ChatID != testChatID || forwarded[0].MessageID != 707 {
+		t.Fatalf("delivered part = %+v, want chat %d and message id 707", forwarded[0], testChatID)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if requests < 2 {
+		t.Fatalf("telegram requests = %d, want at least 2 (the first succeeded, the second failed)", requests)
+	}
+}
+
 // messageBudget is the number of message characters that still fit in one
 // Telegram message for testSender, after the fixed prefix and sender.
 func messageBudget() int {

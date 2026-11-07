@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,6 +373,78 @@ func TestService_Forward(t *testing.T) {
 				t.Fatalf("Resolve() error = %v, want ErrMappingNotFound", rerr)
 			}
 		})
+	}
+}
+
+// TestService_ForwardStoresMappingsForDeliveredPartsOnPartialFailure asserts a
+// failure on a later chunk of a split message still maps the part Telegram
+// accepted, and reports the failure: the device is told the delivery failed,
+// but a reply to the part that is already in the chat still resolves to the
+// sender.
+func TestService_ForwardStoresMappingsForDeliveredPartsOnPartialFailure(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	requests := 0
+
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if n == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":707}}`))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"stub failure"}`))
+	}))
+	t.Cleanup(stub.Close)
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		newTestBot(t, stub.URL),
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+	repo, _ := newTestStore(t)
+	service := webhook.New(webhook.Config{SigningKey: testSigningKey}, forwarder, repo, metrics, zap.NewNop())
+
+	// Well over the 4096-character Telegram limit (whatever the sender
+	// overhead), so the forward always splits and the second Telegram call is
+	// the one that fails.
+	err := service.Forward(context.Background(), testSender, strings.Repeat("a", 5000))
+	if err == nil {
+		t.Fatal("Forward() error = nil, want the failure of the second chunk")
+	}
+
+	if got := counterValue(metrics, "error"); got != 1 {
+		t.Fatalf("error counter = %v, want 1", got)
+	}
+
+	if got := testutil.ToFloat64(metrics.ForwardErrorsCounter()); got != 1 {
+		t.Fatalf("forward_errors counter = %v, want 1", got)
+	}
+
+	// The delivered part must be mapped even though the forward failed: this is
+	// the mapping a reply to the first bubble resolves through.
+	mapping, rerr := repo.Resolve(context.Background(), testChatID, 707)
+	if rerr != nil {
+		t.Fatalf("Resolve() of the delivered part error = %v, want the mapping stored", rerr)
+	}
+
+	if mapping.Phone != testSender {
+		t.Fatalf("mapping phone = %q, want %q", mapping.Phone, testSender)
 	}
 }
 
