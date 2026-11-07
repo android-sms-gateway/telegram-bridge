@@ -53,6 +53,10 @@ func New(config Config, logger *zap.Logger) (*bolt.DB, error) {
 		return nil, err
 	}
 
+	if err = checkFilePermissions(path); err != nil {
+		return nil, err
+	}
+
 	logger.Debug("opening database", zap.String("path", path))
 
 	db, err := bolt.Open(path, fileMode, &bolt.Options{
@@ -79,6 +83,23 @@ func New(config Config, logger *zap.Logger) (*bolt.DB, error) {
 	logger.Debug("database opened", zap.String("path", path))
 
 	return db, nil
+}
+
+// checkFilePermissions rejects an existing database file that users other than
+// the owner can reach. bbolt creates the file with fileMode, so a file with
+// looser permissions was created outside the service (a copy, an umask slip, a
+// hand-made placeholder): opening it would put service state in front of every
+// account on the host. A path that stat cannot read, a path that does not exist
+// yet and a directory are all left to bolt.Open: it creates a missing file with
+// fileMode and reports anything else as the ErrOpenFailed it is.
+func checkFilePermissions(path string) error {
+	info, err := os.Stat(path)
+	if err == nil && !info.IsDir() && info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%w: %s has mode %04o, want no access for other users",
+			ErrInsecureFile, path, info.Mode().Perm())
+	}
+
+	return nil
 }
 
 // dbPath converts a "bolt://" URL into the filesystem path bbolt opens.

@@ -16,4 +16,9 @@ var (
 	// example because it is locked by another process or because its parent
 	// directory does not exist.
 	ErrOpenFailed = errors.New("boltfx: open database")
+
+	// ErrInsecureFile is returned when the database file already exists with
+	// permissions that let users other than the owner read or write it. The
+	// file holds service state, so startup fails instead of opening it.
+	ErrInsecureFile = errors.New("boltfx: database file is accessible by other users")
 )

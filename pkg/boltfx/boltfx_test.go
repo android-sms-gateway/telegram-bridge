@@ -3,6 +3,7 @@ package boltfx_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -180,6 +181,47 @@ func TestNewOpenFailure(t *testing.T) {
 		if closeErr := db.Close(); closeErr != nil {
 			t.Errorf("close database: %v", closeErr)
 		}
+	}
+}
+
+// TestNewRejectsInsecureFilePermissions asserts an existing database file that
+// other users can reach is refused before bbolt opens it. The placeholder is
+// deliberately not a database: rejection has to happen on the mode alone, ahead
+// of any read. The accept path for an owner-only file is TestNewPersistence,
+// which reopens a database bbolt created with fileMode.
+func TestNewRejectsInsecureFilePermissions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: "world-readable file is rejected", mode: 0o644},
+		{name: "world-accessible file is rejected", mode: 0o666},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "app.db")
+			if err := os.WriteFile(path, []byte("not a database"), 0o600); err != nil {
+				t.Fatalf("create placeholder file: %v", err)
+			}
+
+			if err := os.Chmod(path, tt.mode); err != nil {
+				t.Fatalf("chmod placeholder file: %v", err)
+			}
+
+			db, err := boltfx.New(boltfx.Config{URL: "bolt://" + path}, zap.NewNop())
+			if !errors.Is(err, boltfx.ErrInsecureFile) {
+				t.Fatalf("New() error = %v, want %v", err, boltfx.ErrInsecureFile)
+			}
+
+			if db != nil {
+				t.Fatal("New() returned a database, want nil")
+			}
+		})
 	}
 }
 
