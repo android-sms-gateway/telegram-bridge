@@ -86,22 +86,25 @@ func New(service *bridge.Service, cfg config.Config) handler.Handler {
 
 // Register registers the reply route on the shared router.
 //
-// The route is narrowed twice, and both narrowings happen here, while the route
-// is being registered, not in the handler body:
+// The route is narrowed three times, and all three narrowings happen here,
+// while the route is being registered, not in the handler body:
 //
 //   - the shape: only a message that answers another message reaches
-//     handleReply, so ordinary chat traffic never enters the reply path and a
-//     new route here cannot shadow the /start handler;
+//     handleReply, so ordinary chat traffic never enters the reply path;
 //   - the sender: only an update from an allowed Telegram user reaches it, so an
 //     unauthorized one is never answered in chat and never reaches the bridge
-//     service at all. telegohandler runs the first matching route only, and
-//     /start is registered before this one, so a command sent as a reply is
-//     still answered by the start handler.
+//     service at all;
+//   - the command: a /start sent as a reply is declined here, so the start
+//     handler answers it no matter which of the two routes the handlers group
+//     delivers first. telegohandler runs the first matching route only, and fx
+//     does not guarantee the order of a value group, so registration order must
+//     not decide whether a command leaves as an SMS.
 func (h *Handler) Register(router *telegofx.Router) {
 	router.Handle(
 		h.handleReply,
 		predicates.MessageWithReplyToMessage(),
 		h.allowed.Match,
+		th.Not(th.CommandEqual("start")),
 	)
 }
 

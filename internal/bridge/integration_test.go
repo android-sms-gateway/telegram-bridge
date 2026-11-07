@@ -451,6 +451,34 @@ func TestHandleReply_Allowlist(t *testing.T) {
 	}
 }
 
+// TestHandleReply_StartAsReplyGoesToStartRoute asserts a /start sent as a reply
+// never leaves as an SMS. The fixture registers the reply route before the
+// start route, which is the order fx does not guarantee for a value group: the
+// reply route has to decline command messages on its own predicate instead of
+// trusting registration order. The mapping for the bubble is in the store, so
+// if the reply route claimed the update the send would be observable.
+func TestHandleReply_StartAsReplyGoesToStartRoute(t *testing.T) {
+	t.Parallel()
+
+	f := newHandlerFixture(t, []int64{testAllowedID}, queued())
+	f.storeMapping(t, time.Time{})
+
+	f.deliver(t, updateJSON(testAllowedID, "/start"))
+
+	waitFor(t, func() bool {
+		return f.telegram.count() >= 1 &&
+			strings.Contains(f.telegram.last().Text, "Telegram bridge for SMSGate")
+	}, "the /start answer from the start route")
+
+	if got := f.sms.count(); got != 0 {
+		t.Fatalf("sms sends = %d, want 0 (the reply route declines commands)", got)
+	}
+
+	if got := f.telegram.count(); got != 1 {
+		t.Fatalf("chat messages = %d, want 1 (only the start route answers)", got)
+	}
+}
+
 // TestHandleReply_SendFailure asserts a refused send is reported in chat without
 // leaking the server response, the API credentials or the API address, and that
 // the handler stays up for the next update.
