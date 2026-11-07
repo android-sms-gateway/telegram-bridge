@@ -481,14 +481,11 @@ const (
 
 	testUsername = "api-user"
 	testPassword = "api-password"
-
-	// unknownMessageID is the placeholder the outcome carries when the SMSGate
-	// server answers without an id, which it does for an already queued message.
-	unknownMessageID = "unknown"
 )
 
 // smsSend mirrors the subset of the SMSGate send body the service must produce.
 type smsSend struct {
+	ID           string   `json:"id"`
 	PhoneNumbers []string `json:"phoneNumbers"`
 	TextMessage  struct {
 		Text string `json:"text"`
@@ -722,10 +719,11 @@ func TestReply_SendsToMappedSender(t *testing.T) {
 	}
 }
 
-// TestReply_ConflictWithoutMessageID asserts the placeholder carried when the
-// SMSGate server answers a conflict without an id: the operator is still told the
-// message was queued, and the chat never shows an empty id.
-func TestReply_ConflictWithoutMessageID(t *testing.T) {
+// TestReply_ConflictCarriesQueuedID asserts a conflict is still reported as
+// queued and the outcome carries the id the message was queued under: the
+// SMSGate conflict answer itself carries no id, so the chat shows the stable id
+// the send was generated with, never an empty one or the placeholder.
+func TestReply_ConflictCarriesQueuedID(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, conflict())
@@ -733,9 +731,17 @@ func TestReply_ConflictWithoutMessageID(t *testing.T) {
 
 	got := f.service.Reply(context.Background(), answer(testReplyText))
 
-	want := bridge.Outcome{Kind: bridge.OutcomeSent, Phone: testPhone, MessageID: unknownMessageID}
-	if got != want {
-		t.Fatalf("Reply() outcome = %+v, want %+v", got, want)
+	if got.Kind != bridge.OutcomeSent || got.Phone != testPhone {
+		t.Fatalf("Reply() outcome = %+v, want queued for %s", got, testPhone)
+	}
+
+	send := f.sms.last()
+	if send.ID == "" {
+		t.Fatal("queued request id = empty, want a client-generated id")
+	}
+
+	if got.MessageID != send.ID {
+		t.Fatalf("outcome message id = %q, want the queued id %q", got.MessageID, send.ID)
 	}
 
 	if n := f.sms.count(); n != 1 {

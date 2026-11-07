@@ -3,11 +3,14 @@ package smsgate
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/android-sms-gateway/client-go/rest"
 	"github.com/android-sms-gateway/client-go/smsgateway"
 	"github.com/cenkalti/backoff/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -17,6 +20,10 @@ import (
 // the update pipeline busy behind a failing SMSGate server. After this budget
 // the reply is reported to the chat as failed and the operator retries.
 const retryMaxElapsed = 30 * time.Second
+
+// statusCodeMarker is what client-go (rest.formatError) puts in front of the
+// HTTP status code of every error that is neither a 400, a 409 nor a 5xx.
+const statusCodeMarker = "unexpected status code "
 
 // Service enqueues SMS through the SMSGate server REST API.
 //
@@ -70,12 +77,19 @@ func New(cfg Config, logger *zap.Logger) *Service {
 	}
 }
 
-// Send queues text as an SMS to phone and returns the message id the SMSGate
-// server assigned to it.
+// Send queues text as an SMS to phone and returns the message id of the queued
+// message.
 //
-// A 409 from the server means the message is already queued and is reported as
-// success, so a retried send never queues a second SMS. A 4xx that is not a
-// conflict is permanent and is never retried; anything else (network, timeout,
+// One id is generated per Send, before the first attempt, and every retry
+// carries it: the server enforces uniqueness of (id, device), so a retry after
+// a timeout collides with the insert the first attempt already made and is
+// answered with a 409 instead of queueing a second SMS. Without a stable id the
+// server would generate a fresh id per attempt and both would be queued. That
+// 409 means "already queued" and is reported as success with the generated id,
+// because the error response carries no id of its own.
+//
+// A 4xx is permanent and is never retried, except 408 Request Timeout and 429
+// Too Many Requests, which a retry may clear. Anything else (network, timeout,
 // 5xx) is retried with an exponential backoff until it succeeds or
 // retryMaxElapsed is spent.
 func (s *Service) Send(ctx context.Context, phone, text string) (string, error) {
@@ -90,7 +104,7 @@ func (s *Service) Send(ctx context.Context, phone, text string) (string, error) 
 		PhoneNumbers: []string{phone},
 		Priority:     smsgateway.PriorityDefault,
 
-		ID:                 "",
+		ID:                 uuid.NewString(),
 		Message:            "",
 		DataMessage:        nil,
 		MmsMessage:         nil,
@@ -111,10 +125,14 @@ func (s *Service) Send(ctx context.Context, phone, text string) (string, error) 
 		if rest.IsConflict(err) {
 			s.logger.Info("message already enqueued", zap.String("phone", phone))
 
-			return state.ID, nil
+			return sms.ID, nil
 		}
 
 		if rest.IsClientError(err) {
+			if transientClientStatus(err) {
+				return "", fmt.Errorf("smsgate: send: %w", err)
+			}
+
 			return "", backoff.Permanent(fmt.Errorf("smsgate: send: %w", err))
 		}
 
@@ -140,4 +158,27 @@ func (s *Service) Send(ctx context.Context, phone, text string) (string, error) 
 	}
 
 	return id, nil
+}
+
+// transientClientStatus reports whether err carries one of the two 4xx statuses
+// a retry may clear: 408 Request Timeout and 429 Too Many Requests.
+//
+// client-go classifies every 4xx that is not a 400 or a 409 as rest.ErrClient
+// and exposes the status only inside the error text ("unexpected status code
+// %d ..."), so that text is the single place the number is readable from. An
+// error without such a status keeps the permanent treatment it had before the
+// two transient statuses were told apart.
+func transientClientStatus(err error) bool {
+	msg := err.Error()
+	idx := strings.Index(msg, statusCodeMarker)
+	if idx < 0 {
+		return false
+	}
+
+	var code int
+	if _, serr := fmt.Sscanf(msg[idx:], statusCodeMarker+"%d", &code); serr != nil {
+		return false
+	}
+
+	return code == http.StatusRequestTimeout || code == http.StatusTooManyRequests
 }

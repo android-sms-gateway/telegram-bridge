@@ -27,6 +27,7 @@ const (
 
 // sendRequest mirrors the subset of the SMSGate send body the bridge must set.
 type sendRequest struct {
+	ID           string   `json:"id"`
 	PhoneNumbers []string `json:"phoneNumbers"`
 	TextMessage  struct {
 		Text string `json:"text"`
@@ -164,6 +165,10 @@ func TestService_Send(t *testing.T) {
 	if req.TextMessage.Text != testText {
 		t.Fatalf("text = %q, want %q", req.TextMessage.Text, testText)
 	}
+
+	if req.ID == "" {
+		t.Fatal("request id = empty, want a client-generated id the server can deduplicate on")
+	}
 }
 
 // TestService_SendRetriesServerError asserts a 5xx is retried and the send still
@@ -189,18 +194,19 @@ func TestService_SendRetriesServerError(t *testing.T) {
 }
 
 // TestService_SendClassifiesErrors pins the client-go error classification the
-// retry loop depends on: a client error is permanent, a conflict is a success
-// and a server error is retried.
+// retry loop depends on: a client error is permanent, the transient 408 and 429
+// are retried, a conflict is a success and a server error is retried.
 func TestService_SendClassifiesErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		statuses  []int
-		wantErr   bool
-		wantIs    func(error) bool
-		wantID    string
-		wantCalls int
+		name       string
+		statuses   []int
+		wantErr    bool
+		wantIs     func(error) bool
+		wantID     string
+		wantIDFrom bool
+		wantCalls  int
 	}{
 		{
 			name:      "bad request is permanent",
@@ -219,12 +225,32 @@ func TestService_SendClassifiesErrors(t *testing.T) {
 			wantCalls: 1,
 		},
 		{
-			name:      "conflict means already enqueued",
-			statuses:  []int{http.StatusConflict},
+			name:      "request timeout is retried",
+			statuses:  []int{http.StatusRequestTimeout, http.StatusOK},
 			wantErr:   false,
 			wantIs:    nil,
-			wantID:    "",
-			wantCalls: 1,
+			wantID:    testStateID,
+			wantCalls: 2,
+		},
+		{
+			name:      "too many requests is retried",
+			statuses:  []int{http.StatusTooManyRequests, http.StatusOK},
+			wantErr:   false,
+			wantIs:    nil,
+			wantID:    testStateID,
+			wantCalls: 2,
+		},
+		{
+			// The conflict answer carries no id of its own: the send reports the
+			// id it generated, which is the id the server queued the message
+			// under, not an empty placeholder.
+			name:       "conflict means already enqueued",
+			statuses:   []int{http.StatusConflict},
+			wantErr:    false,
+			wantIs:     nil,
+			wantID:     "",
+			wantIDFrom: true,
+			wantCalls:  1,
 		},
 		{
 			// The server error is retried, the client error that follows is not:
@@ -252,7 +278,12 @@ func TestService_SendClassifiesErrors(t *testing.T) {
 				t.Fatalf("Send() error = %v, want error: %v", err, tt.wantErr)
 			}
 
-			if id != tt.wantID {
+			if tt.wantIDFrom {
+				req, _ := server.call(t, 0)
+				if req.ID == "" || id != req.ID {
+					t.Fatalf("Send() id = %q, want the id the request carried (%q)", id, req.ID)
+				}
+			} else if id != tt.wantID {
 				t.Fatalf("Send() id = %q, want %q", id, tt.wantID)
 			}
 
@@ -264,6 +295,31 @@ func TestService_SendClassifiesErrors(t *testing.T) {
 				t.Fatalf("requests served = %d, want exactly %d", calls, tt.wantCalls)
 			}
 		})
+	}
+}
+
+// TestService_SendRetriesWithSameID asserts every retry of one send carries the
+// same client-generated id, which is what lets the server's unique (id, device)
+// insert turn a retry after a timeout into a 409 instead of a second SMS.
+func TestService_SendRetriesWithSameID(t *testing.T) {
+	t.Parallel()
+
+	server := newStub(t, http.StatusInternalServerError, http.StatusOK)
+	service := newService(t, server.server.URL, smsgate.DefaultTimeout)
+
+	if _, err := service.Send(context.Background(), testPhone, testText); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	first, _ := server.call(t, 0)
+	second, _ := server.call(t, 1)
+
+	if first.ID == "" {
+		t.Fatal("first request id = empty, want a client-generated id")
+	}
+
+	if first.ID != second.ID {
+		t.Fatalf("retry id = %q, want the first attempt's id %q", second.ID, first.ID)
 	}
 }
 
