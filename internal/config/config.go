@@ -10,13 +10,14 @@ import (
 // Raw koanf fields for every configuration section. Module-owned values are
 // mapped from here in module.go and reach their consumer as the bare value
 // that consumer takes.
-// Sections without a module yet (storage) stay raw until their wave-2 modules
-// are created.
 //
 // Every section mirrors exactly one runtime owner: telegram carries only
-// telegofx infrastructure and becomes telegofx.Config field by field; bridge
-// carries only the forward target and becomes bridge.Config; smsgate.webhook
-// nests under the SMSGate integration it authenticates.
+// telegofx infrastructure and becomes telegofx.Config field by field; bot
+// carries who may drive the routes the bot registers and becomes
+// internal/bot/config.Config; bridge carries only the forward target and
+// becomes bridge.Config; smsgate.webhook nests under the SMSGate integration
+// it authenticates; storage carries only the embedded database location and
+// becomes boltfx.Config, which opens the file for internal/store.
 type http struct {
 	Address     string   `koanf:"address"`
 	ProxyHeader string   `koanf:"proxy_header"`
@@ -33,16 +34,25 @@ type openAPIConfig struct {
 
 // telegramConfig is the telegofx infrastructure surface only. The token and the
 // SOCKS5 proxy dialer are both owned by telegofx and reach it unchanged as
-// telegofx.Config fields (see module.go); where a forwarded message is
-// delivered is not a Telegram client setting and lives in bridgeConfig.
+// telegofx.Config fields (see module.go); who may drive the bot is not a
+// Telegram client setting and lives in botConfig, next to the module that
+// enforces it.
 type telegramConfig struct {
 	Token    string `koanf:"token"`
 	ProxyURL string `koanf:"proxy_url"`
 }
 
+// botConfig is the bot-module surface: who may talk to this bot. The allowlist
+// authorizes a Telegram actor, and the module that turns an update into a call
+// is the bot itself, so the section follows the setting to the routes that
+// enforce it (see module.go).
+type botConfig struct {
+	AllowedUserIDs []int64 `koanf:"allowed_user_ids"`
+}
+
 // bridgeConfig is the bridge-domain surface: the single forward target of the
 // SMSGate -> Telegram bridge. It reaches internal/bridge as
-// bridge.Config{ChatID} (see module.go).
+// bridge.Config.ChatID (see module.go).
 type bridgeConfig struct {
 	ChatID int64 `koanf:"chat_id"`
 }
@@ -62,6 +72,9 @@ type smsgateConfig struct {
 	Webhook webhookConfig `koanf:"webhook"`
 }
 
+// storageConfig is the embedded database surface: the single bbolt file that
+// holds the bridge state. It reaches pkg/boltfx unchanged as
+// boltfx.Config{URL} (see module.go); internal/store owns the bucket schema.
 type storageConfig struct {
 	URL string `koanf:"url"`
 }
@@ -69,6 +82,7 @@ type storageConfig struct {
 type Config struct {
 	HTTP     http           `koanf:"http"`
 	Telegram telegramConfig `koanf:"telegram"`
+	Bot      botConfig      `koanf:"bot"`
 	Bridge   bridgeConfig   `koanf:"bridge"`
 
 	SMSGate smsgateConfig `koanf:"smsgate"`
@@ -90,6 +104,11 @@ func Default() Config {
 		Telegram: telegramConfig{
 			Token:    "",
 			ProxyURL: "",
+		},
+		Bot: botConfig{
+			// An empty allowlist closes every filtered route: replies stay off
+			// until an operator names the Telegram ids that may use them.
+			AllowedUserIDs: []int64{},
 		},
 		Bridge: bridgeConfig{
 			ChatID: 0,

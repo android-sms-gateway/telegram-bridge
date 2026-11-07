@@ -1,0 +1,24 @@
+package boltfx
+
+import "errors"
+
+var (
+	// ErrEmptyURL is returned when Config.URL carries no database location,
+	// either because it is empty or because it holds no path at all (for
+	// example "bolt://" or "bolt:///").
+	ErrEmptyURL = errors.New("boltfx: url is empty")
+
+	// ErrInvalidScheme is returned when Config.URL cannot be parsed or uses a
+	// scheme other than "bolt".
+	ErrInvalidScheme = errors.New("boltfx: invalid url scheme")
+
+	// ErrOpenFailed is returned when the database file cannot be opened, for
+	// example because it is locked by another process or because its parent
+	// directory does not exist.
+	ErrOpenFailed = errors.New("boltfx: open database")
+
+	// ErrInsecureFile is returned when the database file already exists with
+	// permissions that let users other than the owner read or write it. The
+	// file holds service state, so startup fails instead of opening it.
+	ErrInsecureFile = errors.New("boltfx: database file is accessible by other users")
+)
