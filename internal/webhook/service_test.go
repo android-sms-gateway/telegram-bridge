@@ -319,8 +319,8 @@ func TestService_Forward(t *testing.T) {
 
 			metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
 			stub := newTelegramStub(t, tt.stubStatus, tt.messageID)
-			// Forward-only construction: the reply allowlist is empty, and the
-			// reply collaborators are nil because no case here answers a bubble.
+			// Forward-only construction: the reply collaborators are nil because
+			// no case here answers a bubble.
 			forwarder := bridge.New(
 				bridge.Config{ChatID: tt.chatID},
 				newTestBot(t, stub.URL),
@@ -384,8 +384,8 @@ func TestService_ForwardSurvivesStoreFailure(t *testing.T) {
 
 	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
 	stub := newTelegramStub(t, http.StatusOK, 77)
-	// Forward-only construction: the reply allowlist is empty, and the reply
-	// collaborators are nil because no case here answers a bubble.
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
 	forwarder := bridge.New(
 		bridge.Config{ChatID: testChatID},
 		newTestBot(t, stub.URL),
@@ -428,8 +428,8 @@ func TestService_ForwardKeepsLatestMapping(t *testing.T) {
 
 	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
 	stub := newTelegramStub(t, http.StatusOK, 5)
-	// Forward-only construction: the reply allowlist is empty, and the reply
-	// collaborators are nil because no case here answers a bubble.
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
 	forwarder := bridge.New(
 		bridge.Config{ChatID: testChatID},
 		newTestBot(t, stub.URL),

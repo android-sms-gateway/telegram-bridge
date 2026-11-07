@@ -140,8 +140,8 @@ func newFixture(t *testing.T, signingKey string, m *webhook.Metrics, logger *zap
 		t.Fatalf("create bot: %v", err)
 	}
 
-	// Forward-only construction: the reply allowlist is empty, and the reply
-	// collaborators are nil because no case here answers a bubble.
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
 	forwarder := bridge.New(
 		bridge.Config{ChatID: testChatID},
 		bot,

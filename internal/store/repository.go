@@ -323,9 +323,9 @@ func isExpired(mapping Mapping, now time.Time) bool {
 
 // expiredKeys collects the keys of every mapping that is expired at now.
 //
-// A record that cannot be decoded is kept and reported: it is skipped by
-// Resolve already, and deleting data on a guess is worse than leaving it for an
-// operator to inspect.
+// A record that cannot be decoded is kept and reported: Resolve fails it with
+// ErrInvalidMapping rather than treating it as missing, and deleting data on a
+// guess is worse than leaving it for an operator to inspect.
 func expiredKeys(bucket *bolt.Bucket, now time.Time, logger *zap.Logger) [][]byte {
 	keys := [][]byte{}
 
