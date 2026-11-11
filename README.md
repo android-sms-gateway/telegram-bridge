@@ -77,6 +77,7 @@ What it does:
 
 * **Webhook ingest** — receives SMSGate app webhooks at `POST /api/v1/webhook`.
 * **Signature verification** — authenticates every request with an HMAC-SHA256 signature and rejects requests whose timestamp falls outside a 5-minute window. The window narrows but does not eliminate replay; delivery is at-least-once. An empty signing key rejects everything.
+* **Event de-duplication** — a redelivered event is acknowledged but not forwarded twice. Deliveries are keyed by webhook id and event id, and the marker lives for 24 hours in the configured cache backend.
 * **Telegram delivery** — forwards the sender number and message text to a configured Telegram chat, escaping the content and splitting messages that exceed Telegram's length limit.
 * **Webhook event filtering** — accepts only the `sms:received` event; any other event type or a payload without an `event` field is rejected with 400.
 * **Operations endpoints** — liveness, readiness and startup health checks, Prometheus metrics, and a Swagger UI for the API.
@@ -176,6 +177,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
   -H "X-Signature: <hex-signature>" \
   -H "X-Timestamp: <unix-seconds>" \
   -d '{
+    "id": "event-id-1",
+    "webhookId": "webhook-1",
     "event": "sms:received",
     "payload": {
       "sender": "6505551212",
@@ -184,7 +187,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
   }'
 ```
 
-On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. See `requests.http` for a ready-to-run example, including how to compute the signature.
+On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. A redelivery of the same envelope `id` also replies `{"status":"ok"}` but is skipped instead of forwarded again while its marker is present (24-hour TTL). De-duplication is best-effort: if the cache read or marker write fails, the event is still forwarded and acknowledged, so a later redelivery may be forwarded again; the default in-memory cache (`CACHE__URL=memory://`) also loses markers on restart and is not shared between replicas. A redelivery that arrives while the first delivery is still running in the same instance waits for it: it is skipped only if the first forward succeeded, otherwise it retries the forward. The in-flight wait is per instance, so deliveries that reach different replicas may both be forwarded even when Redis is used. See `requests.http` for a ready-to-run example, including how to compute the signature.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -203,11 +206,14 @@ The settings you will most likely change:
 | `TELEGRAM__PROXY_URL`           | SOCKS5 proxy for Telegram API traffic (`socks5://` or `socks5h://`). | *(empty)*        |
 | `HTTP__ADDRESS`                 | Address the HTTP server binds to.                                    | `127.0.0.1:3000` |
 | `HTTP__OPENAPI__ENABLED`        | Serve the Swagger UI and API document under `/api/v1/docs`.          | `true`           |
+| `CACHE__URL`                    | Dedup cache backend: `memory://` (per-process) or `redis://`.        | `memory://`      |
+| `CACHE__SWEEP_INTERVAL`         | How often expired cache entries are evicted. Must be positive.       | `1m`             |
 | `CONFIG_PATH`                   | Path to an optional YAML configuration file.                         | *(empty)*        |
 
 Notes:
 
 * Keys use `__` to separate nesting levels, and key matching is case-insensitive.
+* `CACHE__URL=redis://` requires Redis 7.4 or newer: the de-duplication markers rely on hash-field TTLs, which earlier Redis versions do not support.
 * `TELEGRAM__TOKEN` and `SMSGATE__WEBHOOK__SIGNING_KEY` are secrets — keep them out of version control.
 * `CONFIG_PATH`, `DEBUG` and `TZ` are read directly from the process environment, so set them in your shell rather than in `.env`.
 

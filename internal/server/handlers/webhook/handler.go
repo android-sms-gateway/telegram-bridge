@@ -1,7 +1,8 @@
 package webhook
 
 import (
-	"github.com/android-sms-gateway/client-go/smsgateway"
+	"fmt"
+
 	"github.com/android-sms-gateway/telegram-bridge/internal/server/middleware/signature"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
 	"github.com/go-core-fx/fiberfx/handler"
@@ -44,7 +45,7 @@ func (h *Handler) Register(r fiber.Router) {
 }
 
 //	@Summary		Receive SMSGate webhook
-//	@Description	Verifies the payload signature and forwards the message to Telegram. Only the sms:received event is accepted.
+//	@Description	Verifies the payload signature, de-duplicates the event by envelope id, and forwards the message to Telegram. Only the sms:received event is accepted.
 //	@Tags			webhook
 //	@Accept			json
 //	@Produce		json
@@ -69,13 +70,6 @@ func (h *Handler) post(c *fiber.Ctx, req *Request) error {
 		zap.String("device_id", req.DeviceID),
 		zap.String("message_id", req.Payload.MessageID))
 
-	// The app sends the event type in the envelope. Only sms:received carries a
-	// received SMS, so the event must match exactly: any other value and a
-	// payload without the envelope event are rejected instead of forwarded.
-	if req.Event != smsgateway.WebhookEventSmsReceived {
-		return fiber.NewError(fiber.StatusBadRequest, "unsupported webhook event")
-	}
-
 	// The app marks phoneNumber deprecated in favor of sender; both carry the
 	// external sender number for sms:received events. Older app versions may
 	// only send phoneNumber.
@@ -84,12 +78,12 @@ func (h *Handler) post(c *fiber.Ctx, req *Request) error {
 		phoneNumber = req.Payload.PhoneNumber
 	}
 
-	if phoneNumber == "" || req.Payload.Message == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "sender and message are required")
-	}
+	// The webhook id scopes the event id: the same event id delivered through a
+	// different webhook is a different delivery.
+	eventKey := req.WebhookID + ":" + req.ID
 
-	if err := h.webhookSvc.Forward(c.Context(), phoneNumber, req.Payload.Message); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to forward message")
+	if err := h.webhookSvc.Forward(c.Context(), eventKey, phoneNumber, req.Payload.Message); err != nil {
+		return fmt.Errorf("failed to forward message: %w", err)
 	}
 
 	return c.JSON(ForwardResponse{Status: statusOK})
