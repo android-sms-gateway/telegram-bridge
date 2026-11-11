@@ -11,14 +11,15 @@ const (
 
 	resultLabel = "result"
 
-	resultOK       = "ok"
-	resultRejected = "rejected"
-	resultError    = "error"
+	resultOK        = "ok"
+	resultRejected  = "rejected"
+	resultError     = "error"
+	resultDuplicate = "duplicate"
 )
 
 // Metrics collects Prometheus metrics for webhook processing.
 type Metrics struct {
-	// total counts webhook requests by result (ok, rejected, error).
+	// total counts webhook requests by result (ok, rejected, error, duplicate).
 	total *prometheus.CounterVec
 
 	// forwardErrors counts failures to deliver a message to Telegram.

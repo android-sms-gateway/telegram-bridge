@@ -6,9 +6,11 @@ import (
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bot"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
+	appcache "github.com/android-sms-gateway/telegram-bridge/internal/cache"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
 	"github.com/android-sms-gateway/telegram-bridge/internal/server"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/healthfx"
 	"github.com/go-core-fx/logger"
@@ -37,7 +39,7 @@ func run(ctx context.Context, version healthfx.Version) error {
 		logger.WithFxDefaultLogger(),
 		// badgerfx.Module(),
 		// bunfx.Module(),
-		// cachefx.Module(),
+		cachefx.Module(cachefx.WithSweeper()),
 		fiberfx.Module(),
 		// gocqlfx.Module(),
 		// gocqlxfx.Module(),
@@ -58,6 +60,7 @@ func run(ctx context.Context, version healthfx.Version) error {
 		config.Module(),
 		server.Module(),
 		bot.Module(),
+		appcache.Module(),
 		//
 		// BUSINESS MODULES
 		fx.Supply(version),

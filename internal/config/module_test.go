@@ -5,10 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/cachefx"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
 	"go.uber.org/fx"
@@ -131,22 +133,24 @@ func TestTelegofxProxyMapping(t *testing.T) {
 // loadModuleConfigs builds the config module and captures every value it
 // provides to a consumer, so one test can assert the whole raw -> consumer
 // mapping without constructing a bot or an HTTP server.
-func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Config) {
+func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Config, cachefx.Config) {
 	t.Helper()
 
 	var (
 		gotTelegofx telegofx.Config
 		gotBridge   bridge.Config
 		gotWebhook  webhook.Config
+		gotCache    cachefx.Config
 	)
 
 	app := fx.New(
 		fx.NopLogger,
 		config.Module(),
-		fx.Invoke(func(tf telegofx.Config, bg bridge.Config, wh webhook.Config) {
+		fx.Invoke(func(tf telegofx.Config, bg bridge.Config, wh webhook.Config, cc cachefx.Config) {
 			gotTelegofx = tf
 			gotBridge = bg
 			gotWebhook = wh
+			gotCache = cc
 		}),
 	)
 
@@ -154,20 +158,22 @@ func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Co
 		t.Fatalf("config module error = %v", err)
 	}
 
-	return gotTelegofx, gotBridge, gotWebhook
+	return gotTelegofx, gotBridge, gotWebhook, gotCache
 }
 
 // TestModuleConfigMapping asserts the raw koanf/env surface reaches each
 // consumer in the shape that consumer takes: the telegram section as
-// telegofx.Config, the bridge section as bridge.Config, the webhook signing
-// key as webhook.Config.
+// telegofx.Config, the bridge section as bridge.Config, the cache section as
+// cachefx.Config, the webhook signing key as webhook.Config.
 func TestModuleConfigMapping(t *testing.T) {
 	t.Setenv("TELEGRAM__TOKEN", testToken)
 	t.Setenv("TELEGRAM__PROXY_URL", "socks5h://127.0.0.1:1080")
 	t.Setenv("BRIDGE__CHAT_ID", "123456789")
+	t.Setenv("CACHE__URL", "redis://127.0.0.1:6379")
+	t.Setenv("CACHE__SWEEP_INTERVAL", "30s")
 	t.Setenv("SMSGATE__WEBHOOK__SIGNING_KEY", "env-signing-key")
 
-	gotTelegofx, gotBridge, gotWebhook := loadModuleConfigs(t)
+	gotTelegofx, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
 
 	wantTelegofx := telegofx.Config{
 		Token:    testToken,
@@ -180,6 +186,11 @@ func TestModuleConfigMapping(t *testing.T) {
 
 	if gotBridge != (bridge.Config{ChatID: 123456789}) {
 		t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 123456789})
+	}
+
+	wantCache := cachefx.Config{URL: "redis://127.0.0.1:6379", SweepInterval: 30 * time.Second}
+	if gotCache != wantCache {
+		t.Fatalf("cachefx.Config = %+v, want %+v", gotCache, wantCache)
 	}
 
 	if gotWebhook != (webhook.Config{SigningKey: "env-signing-key"}) {
@@ -244,7 +255,7 @@ func TestBridgeChatIDSectionIsolation(t *testing.T) {
 				t.Setenv(key, value)
 			}
 
-			_, gotBridge, _ := loadModuleConfigs(t)
+			_, gotBridge, _, _ := loadModuleConfigs(t)
 
 			if gotBridge != (bridge.Config{ChatID: tt.want}) {
 				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: tt.want})
@@ -262,6 +273,8 @@ func TestModuleConfigDefaults(t *testing.T) {
 		"TELEGRAM__PROXY_URL",
 		"BRIDGE__CHAT_ID",
 		"TELEGRAM__CHAT_ID",
+		"CACHE__URL",
+		"CACHE__SWEEP_INTERVAL",
 		"SMSGATE__WEBHOOK__SIGNING_KEY",
 	}
 
@@ -281,7 +294,7 @@ func TestModuleConfigDefaults(t *testing.T) {
 		},
 		{
 			name:  "empty env matches raw defaults",
-			unset: nil,
+			unset: []string{"CACHE__URL", "CACHE__SWEEP_INTERVAL"},
 			wantTelegofx: telegofx.Config{
 				Token:    "",
 				ProxyURL: "",
@@ -302,7 +315,7 @@ func TestModuleConfigDefaults(t *testing.T) {
 				}
 			}
 
-			gotTelegofx, gotBridge, gotWebhook := loadModuleConfigs(t)
+			gotTelegofx, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
 
 			if gotTelegofx != tt.wantTelegofx {
 				t.Fatalf("telegofx.Config = %+v, want %+v", gotTelegofx, tt.wantTelegofx)
@@ -310,6 +323,11 @@ func TestModuleConfigDefaults(t *testing.T) {
 
 			if gotBridge != (bridge.Config{ChatID: 0}) {
 				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 0})
+			}
+
+			wantCache := cachefx.Config{URL: "memory://", SweepInterval: time.Minute}
+			if gotCache != wantCache {
+				t.Fatalf("cachefx.Config = %+v, want %+v", gotCache, wantCache)
 			}
 
 			if gotWebhook != (webhook.Config{SigningKey: ""}) {
