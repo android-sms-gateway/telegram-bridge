@@ -1,23 +1,28 @@
 module github.com/android-sms-gateway/telegram-bridge
 
-go 1.26.0
+go 1.26.7
 
 require (
 	github.com/android-sms-gateway/client-go v1.16.4-0.20261021050309-3ad785299ad0
+	github.com/cenkalti/backoff/v5 v5.0.3
+	github.com/go-core-fx/boltfx v0.0.0-20261109044402-6d562b803a2b
 	github.com/go-core-fx/cachefx v0.2.0
 	github.com/go-core-fx/config v0.1.0
 	github.com/go-core-fx/fiberfx v0.6.0
+	github.com/go-core-fx/fxutil v0.0.2
 	github.com/go-core-fx/healthfx v0.1.0
 	github.com/go-core-fx/logger v0.0.1
-	github.com/go-core-fx/telegofx v0.4.0
+	github.com/go-core-fx/telegofx v0.4.1-0.20261011015657-707f026cd640
 	github.com/go-core-fx/validatorfx v0.0.2
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gofiber/fiber/v2 v2.52.16
+	github.com/google/uuid v1.6.0
 	github.com/mymmrac/telego v1.11.2
 	github.com/prometheus/client_golang v1.25.0
 	github.com/samber/lo v1.53.0
 	github.com/swaggo/swag v1.16.6
 	github.com/urfave/cli/v3 v3.10.1
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 )
@@ -35,7 +40,6 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
-	github.com/go-core-fx/fxutil v0.0.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
 	github.com/go-openapi/spec v0.22.6 // indirect
@@ -51,7 +55,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gofiber/contrib/fiberzap/v2 v2.1.6 // indirect
 	github.com/gofiber/swagger v1.1.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grbit/go-json v0.11.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect

@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	botconfig "github.com/android-sms-gateway/telegram-bridge/internal/bot/config"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
+	"github.com/android-sms-gateway/telegram-bridge/internal/smsgate"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/boltfx"
 	"github.com/go-core-fx/cachefx"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
@@ -163,11 +167,13 @@ func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Co
 
 // TestModuleConfigMapping asserts the raw koanf/env surface reaches each
 // consumer in the shape that consumer takes: the telegram section as
-// telegofx.Config, the bridge section as bridge.Config, the cache section as
-// cachefx.Config, the webhook signing key as webhook.Config.
+// telegofx.Config, the bot allowlist as botconfig.Config, the bridge config as
+// bridge.Config, the cache section as cachefx.Config and the webhook signing
+// key as webhook.Config.
 func TestModuleConfigMapping(t *testing.T) {
 	t.Setenv("TELEGRAM__TOKEN", testToken)
 	t.Setenv("TELEGRAM__PROXY_URL", "socks5h://127.0.0.1:1080")
+	t.Setenv("BOT__ALLOWED_USER_IDS", "[111,222]")
 	t.Setenv("BRIDGE__CHAT_ID", "123456789")
 	t.Setenv("CACHE__URL", "redis://127.0.0.1:6379")
 	t.Setenv("CACHE__SWEEP_INTERVAL", "30s")
@@ -184,8 +190,17 @@ func TestModuleConfigMapping(t *testing.T) {
 		t.Fatalf("telegofx.Config = %+v, want %+v", gotTelegofx, wantTelegofx)
 	}
 
-	if gotBridge != (bridge.Config{ChatID: 123456789}) {
-		t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 123456789})
+	// The bot section carries the reply allowlist alone, and the bridge config
+	// carries the forward target alone: neither setting leaks into the other.
+	wantBridge := bridge.Config{ChatID: 123456789}
+	if gotBridge != wantBridge {
+		t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, wantBridge)
+	}
+
+	gotBot := loadBotConfig(t)
+	wantBot := botconfig.Config{AllowedUserIDs: []int64{111, 222}}
+	if !slices.Equal(gotBot.AllowedUserIDs, wantBot.AllowedUserIDs) {
+		t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", gotBot.AllowedUserIDs, wantBot.AllowedUserIDs)
 	}
 
 	wantCache := cachefx.Config{URL: "redis://127.0.0.1:6379", SweepInterval: 30 * time.Second}
@@ -196,6 +211,25 @@ func TestModuleConfigMapping(t *testing.T) {
 	if gotWebhook != (webhook.Config{SigningKey: "env-signing-key"}) {
 		t.Fatalf("webhook.Config = %+v, want %+v", gotWebhook, webhook.Config{SigningKey: "env-signing-key"})
 	}
+}
+
+// loadBotConfig builds the config module and captures the bot module config.
+func loadBotConfig(t *testing.T) botconfig.Config {
+	t.Helper()
+
+	var gotBot botconfig.Config
+
+	app := fx.New(
+		fx.NopLogger,
+		config.Module(),
+		fx.Invoke(func(b botconfig.Config) { gotBot = b }),
+	)
+
+	if err := app.Err(); err != nil {
+		t.Fatalf("config module error = %v", err)
+	}
+
+	return gotBot
 }
 
 // clearChatIDEnv removes both spellings of the forward target from the process
@@ -257,8 +291,8 @@ func TestBridgeChatIDSectionIsolation(t *testing.T) {
 
 			_, gotBridge, _, _ := loadModuleConfigs(t)
 
-			if gotBridge != (bridge.Config{ChatID: tt.want}) {
-				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: tt.want})
+			if gotBridge.ChatID != tt.want {
+				t.Fatalf("bridge.Config.ChatID = %d, want %d", gotBridge.ChatID, tt.want)
 			}
 		})
 	}
@@ -321,8 +355,8 @@ func TestModuleConfigDefaults(t *testing.T) {
 				t.Fatalf("telegofx.Config = %+v, want %+v", gotTelegofx, tt.wantTelegofx)
 			}
 
-			if gotBridge != (bridge.Config{ChatID: 0}) {
-				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 0})
+			if gotBridge.ChatID != 0 {
+				t.Fatalf("bridge.Config.ChatID = %d, want 0 (no forward target)", gotBridge.ChatID)
 			}
 
 			wantCache := cachefx.Config{URL: "memory://", SweepInterval: time.Minute}
@@ -334,5 +368,261 @@ func TestModuleConfigDefaults(t *testing.T) {
 				t.Fatalf("webhook.Config = %+v, want empty signing key (fail-closed)", gotWebhook)
 			}
 		})
+	}
+}
+
+// TestStorageConfigMapping asserts the raw storage section reaches pkg/boltfx
+// as the database URL, including its default, while the mapping TTL stays the
+// store's own default because no raw key carries it.
+func TestStorageConfigMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		unset   bool
+		wantURL string
+	}{
+		{
+			name:    "absolute url is mapped",
+			url:     "bolt:///var/lib/telegram-bridge/store.db",
+			unset:   false,
+			wantURL: "bolt:///var/lib/telegram-bridge/store.db",
+		},
+		{
+			name:    "relative url is mapped",
+			url:     "bolt://data/custom.db",
+			unset:   false,
+			wantURL: "bolt://data/custom.db",
+		},
+		{
+			name:    "unset env falls back to the raw default",
+			url:     "",
+			unset:   true,
+			wantURL: "bolt://data/telegram-bridge.db",
+		},
+		{
+			// An environment variable that is present but empty overrides the
+			// raw default, and the database is then opened with an empty URL.
+			name:    "empty env overrides the default",
+			url:     "",
+			unset:   false,
+			wantURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("STORAGE__URL", tt.url)
+
+			if tt.unset {
+				// t.Setenv registers the restore hook; Unsetenv then leaves the
+				// variable genuinely absent.
+				if err := os.Unsetenv("STORAGE__URL"); err != nil {
+					t.Fatalf("unset STORAGE__URL: %v", err)
+				}
+			}
+
+			var (
+				gotBolt  boltfx.Config
+				gotStore store.Config
+			)
+
+			app := fx.New(
+				fx.NopLogger,
+				config.Module(),
+				fx.Invoke(func(b boltfx.Config, s store.Config) {
+					gotBolt = b
+					gotStore = s
+				}),
+			)
+
+			if err := app.Err(); err != nil {
+				t.Fatalf("config module error = %v", err)
+			}
+
+			if gotBolt.URL != tt.wantURL {
+				t.Fatalf("boltfx.Config.URL = %q, want %q", gotBolt.URL, tt.wantURL)
+			}
+
+			if gotStore.TTL != store.DefaultTTL {
+				t.Fatalf("store.Config.TTL = %v, want %v", gotStore.TTL, store.DefaultTTL)
+			}
+		})
+	}
+}
+
+// TestReplyAllowlistMapping asserts the raw bot.allowed_user_ids key reaches the
+// bot module config as a list of Telegram ids, including the fail-closed
+// default, and that it never leaks into the telegofx client config or the
+// bridge config.
+func TestReplyAllowlistMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		set  bool
+		raw  string
+		want []int64
+	}{
+		{
+			name: "json array is decoded",
+			set:  true,
+			raw:  "[111,222]",
+			want: []int64{111, 222},
+		},
+		{
+			name: "negative supergroup id is kept",
+			set:  true,
+			raw:  "[-1001234567890]",
+			want: []int64{-1001234567890},
+		},
+		{
+			name: "empty array closes every reply",
+			set:  true,
+			raw:  "[]",
+			want: []int64{},
+		},
+		{
+			name: "unset key falls back to the fail-closed default",
+			set:  false,
+			raw:  "",
+			want: []int64{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BOT__ALLOWED_USER_IDS", tt.raw)
+
+			if !tt.set {
+				// t.Setenv registers the restore hook; Unsetenv then leaves the
+				// variable genuinely absent.
+				if err := os.Unsetenv("BOT__ALLOWED_USER_IDS"); err != nil {
+					t.Fatalf("unset BOT__ALLOWED_USER_IDS: %v", err)
+				}
+			}
+
+			var (
+				gotBot    botconfig.Config
+				gotTelego telegofx.Config
+				gotBridge bridge.Config
+			)
+
+			app := fx.New(
+				fx.NopLogger,
+				config.Module(),
+				fx.Invoke(func(b botconfig.Config, tf telegofx.Config, bg bridge.Config) {
+					gotBot = b
+					gotTelego = tf
+					gotBridge = bg
+				}),
+			)
+
+			if err := app.Err(); err != nil {
+				t.Fatalf("config module error = %v", err)
+			}
+
+			if !slices.Equal(gotBot.AllowedUserIDs, tt.want) {
+				t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", gotBot.AllowedUserIDs, tt.want)
+			}
+
+			// telegofx.Config has no allowlist field: the raw value must not turn
+			// into part of the library-owned client config, nor into part of the
+			// bridge config, which now carries the forward target only.
+			if gotTelego.Token != "" || gotTelego.ProxyURL != "" {
+				t.Fatalf("telegofx.Config = %+v, want it untouched by the allowlist", gotTelego)
+			}
+
+			if gotBridge != (bridge.Config{ChatID: 0}) {
+				t.Fatalf("bridge.Config = %+v, want the forward target only", gotBridge)
+			}
+		})
+	}
+}
+
+// TestAllowedUserIDsSectionIsolation asserts the allowlist is read from the bot
+// section only: BOT__ALLOWED_USER_IDS reaches botconfig.Config, while the former
+// TELEGRAM__ALLOWED_USER_IDS of the combined telegram section is inert, the same
+// way TELEGRAM__CHAT_ID is for the forward target.
+func TestAllowedUserIDsSectionIsolation(t *testing.T) {
+	tests := []struct {
+		name string
+		set  map[string]string
+		want []int64
+	}{
+		{
+			name: "bot key is mapped",
+			set:  map[string]string{"BOT__ALLOWED_USER_IDS": "[111]"},
+			want: []int64{111},
+		},
+		{
+			name: "legacy telegram key is inert",
+			set:  map[string]string{"TELEGRAM__ALLOWED_USER_IDS": "[111]"},
+			want: []int64{},
+		},
+		{
+			name: "both keys set keeps the bot one",
+			set:  map[string]string{"TELEGRAM__ALLOWED_USER_IDS": "[1]", "BOT__ALLOWED_USER_IDS": "[42]"},
+			want: []int64{42},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAllowedUserIDsEnv(t)
+
+			for key, value := range tt.set {
+				t.Setenv(key, value)
+			}
+
+			if got := loadBotConfig(t).AllowedUserIDs; !slices.Equal(got, tt.want) {
+				t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// clearAllowedUserIDsEnv removes both spellings of the reply allowlist from the
+// process environment for the duration of the test: BOT__ALLOWED_USER_IDS is the
+// bot section key, TELEGRAM__ALLOWED_USER_IDS the key of the former telegram
+// section, which the raw config no longer declares.
+func clearAllowedUserIDsEnv(t *testing.T) {
+	t.Helper()
+
+	for _, key := range []string{"BOT__ALLOWED_USER_IDS", "TELEGRAM__ALLOWED_USER_IDS"} {
+		t.Setenv(key, "")
+
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+	}
+}
+
+// TestSMSGateConfigMapping asserts the raw smsgate server API section reaches the
+// smsgate module config, with the per-attempt timeout left on the module
+// default because no raw key carries it.
+func TestSMSGateConfigMapping(t *testing.T) {
+	t.Setenv("SMSGATE__BASE_URL", "https://api.example.com/3rdparty/v1")
+	t.Setenv("SMSGATE__USERNAME", "env-user")
+	t.Setenv("SMSGATE__PASSWORD", "env-password")
+
+	var got smsgate.Config
+
+	app := fx.New(
+		fx.NopLogger,
+		config.Module(),
+		fx.Invoke(func(s smsgate.Config) { got = s }),
+	)
+
+	if err := app.Err(); err != nil {
+		t.Fatalf("config module error = %v", err)
+	}
+
+	want := smsgate.Config{
+		BaseURL:  "https://api.example.com/3rdparty/v1",
+		Username: "env-user",
+		Password: "env-password",
+
+		Timeout: smsgate.DefaultTimeout,
+	}
+	if got != want {
+		t.Fatalf("smsgate.Config = %+v, want %+v", got, want)
 	}
 }

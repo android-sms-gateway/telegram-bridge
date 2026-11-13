@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,12 +17,15 @@ import (
 	"time"
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/boltfx"
 	"github.com/go-core-fx/cachefx/cache"
 	"github.com/go-core-fx/telegofx"
 	"github.com/mymmrac/telego"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	bolt "go.etcd.io/bbolt"
 	"go.uber.org/zap"
 )
 
@@ -93,11 +97,17 @@ func newStubCtl() *stubCtl {
 	}
 }
 
-// newTelegramStub starts a Telegram API stub answering sendMessage calls.
-func newTelegramStub(t *testing.T, status int) *httptest.Server {
+// newTelegramStub starts a Telegram API stub answering sendMessage calls with
+// the given message id.
+func newTelegramStub(t *testing.T, status, messageID int) *httptest.Server {
 	t.Helper()
 
-	server, _ := newCountingTelegramStub(t, status, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":` + strconv.Itoa(messageID) + `}}`))
+	}))
+	t.Cleanup(server.Close)
 
 	return server
 }
@@ -129,6 +139,34 @@ func newCountingTelegramStub(t *testing.T, status int, ctl *stubCtl) (*httptest.
 	t.Cleanup(server.Close)
 
 	return server, &calls
+}
+
+// newTestStore opens the mapping repository the service writes to after a
+// forward, wired the way pkg/boltfx and internal/store are in the serve graph.
+// The raw handle is returned so a test can close the database and force a write
+// failure.
+func newTestStore(t *testing.T) (*store.Repository, *bolt.DB) {
+	t.Helper()
+
+	db, err := boltfx.New(boltfx.Config{URL: "bolt://" + filepath.Join(t.TempDir(), "service.db")}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	// A second Close on a bbolt handle is a no-op, so a test that closed the
+	// database on purpose does not report here.
+	t.Cleanup(func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("close database: %v", cerr)
+		}
+	})
+
+	repo, err := store.NewRepository(store.Config{TTL: store.DefaultTTL}, db)
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+
+	return repo, db
 }
 
 // counterValue reads the current value of one total counter label.
@@ -266,6 +304,7 @@ func TestService_Verify(t *testing.T) {
 				webhook.Config{SigningKey: tt.signingKey},
 				nil,
 				cache.NewMemory(0),
+				nil,
 				metrics,
 				zap.NewNop(),
 			)
@@ -297,37 +336,45 @@ func TestService_Forward(t *testing.T) {
 		name            string
 		chatID          int64
 		stubStatus      int
+		messageID       int
 		wantErr         bool
 		wantTotal       string
 		wantTotalValue  float64
 		wantForwardErrs float64
+		wantMapping     bool
 	}{
 		{
-			name:            "successful forward counts ok",
+			name:            "successful forward counts ok and stores the mapping",
 			chatID:          testChatID,
 			stubStatus:      http.StatusOK,
+			messageID:       4242,
 			wantErr:         false,
 			wantTotal:       "ok",
 			wantTotalValue:  1,
 			wantForwardErrs: 0,
+			wantMapping:     true,
 		},
 		{
 			name:            "failed forward counts error",
 			chatID:          testChatID,
 			stubStatus:      http.StatusInternalServerError,
+			messageID:       4242,
 			wantErr:         true,
 			wantTotal:       "error",
 			wantTotalValue:  1,
 			wantForwardErrs: 1,
+			wantMapping:     false,
 		},
 		{
 			name:            "unconfigured chat counts error",
 			chatID:          0,
 			stubStatus:      http.StatusOK,
+			messageID:       4242,
 			wantErr:         true,
 			wantTotal:       "error",
 			wantTotalValue:  1,
 			wantForwardErrs: 1,
+			wantMapping:     false,
 		},
 	}
 
@@ -336,12 +383,23 @@ func TestService_Forward(t *testing.T) {
 			t.Parallel()
 
 			metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
-			stub := newTelegramStub(t, tt.stubStatus)
-			forwarder := bridge.New(bridge.Config{ChatID: tt.chatID}, newTestBot(t, stub.URL), zap.NewNop())
+			stub := newTelegramStub(t, tt.stubStatus, tt.messageID)
+			// Forward-only construction: the reply collaborators are nil because
+			// no case here answers a bubble.
+			forwarder := bridge.New(
+				bridge.Config{ChatID: tt.chatID},
+				newTestBot(t, stub.URL),
+				nil,
+				nil,
+				zap.NewNop(),
+			)
+			repo, _ := newTestStore(t)
+			storeSvc := store.New(repo, zap.NewNop())
 			service := webhook.New(
 				webhook.Config{SigningKey: testSigningKey},
 				forwarder,
 				cache.NewMemory(0),
+				storeSvc,
 				metrics,
 				zap.NewNop(),
 			)
@@ -366,6 +424,24 @@ func TestService_Forward(t *testing.T) {
 			if got := testutil.ToFloat64(metrics.ForwardErrorsCounter()); got != tt.wantForwardErrs {
 				t.Fatalf("forward_errors counter = %v, want %v", got, tt.wantForwardErrs)
 			}
+
+			// The mapping must exist exactly when Telegram accepted the message:
+			// it is what a reply to the forwarded bubble resolves through.
+			mapping, rerr := repo.Resolve(context.Background(), store.MessageRef{
+				ChatID:    tt.chatID,
+				MessageID: tt.messageID,
+			})
+			if tt.wantMapping {
+				if rerr != nil {
+					t.Fatalf("Resolve() of the stored mapping error = %v", rerr)
+				}
+
+				if mapping.Phone != testSender {
+					t.Fatalf("mapping phone = %q, want %q", mapping.Phone, testSender)
+				}
+			} else if !errors.Is(rerr, store.ErrMappingNotFound) {
+				t.Fatalf("Resolve() error = %v, want ErrMappingNotFound", rerr)
+			}
 		})
 	}
 }
@@ -377,11 +453,14 @@ func TestService_Forward_Deduplicates(t *testing.T) {
 
 	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
 	stub, calls := newCountingTelegramStub(t, http.StatusOK, nil)
-	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), nil, nil, zap.NewNop())
+	repo, _ := newTestStore(t)
+	storeSvc := store.New(repo, zap.NewNop())
 	service := webhook.New(
 		webhook.Config{SigningKey: testSigningKey},
 		forwarder,
 		cache.NewMemory(0),
+		storeSvc,
 		metrics,
 		zap.NewNop(),
 	)
@@ -416,13 +495,16 @@ func TestService_Forward_ReleasesEventOnForwardError(t *testing.T) {
 	t.Parallel()
 
 	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
-	stub := newTelegramStub(t, http.StatusInternalServerError)
-	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	stub := newTelegramStub(t, http.StatusInternalServerError, 1)
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), nil, nil, zap.NewNop())
 	eventCache := cache.NewMemory(0)
+	repo, _ := newTestStore(t)
+	storeSvc := store.New(repo, zap.NewNop())
 	service := webhook.New(
 		webhook.Config{SigningKey: testSigningKey},
 		forwarder,
 		eventCache,
+		storeSvc,
 		metrics,
 		zap.NewNop(),
 	)
@@ -451,11 +533,14 @@ func TestService_Forward_ConcurrentDuplicateForwardsOnce(t *testing.T) {
 	defer ctl.release()
 
 	stub, calls := newCountingTelegramStub(t, http.StatusOK, ctl)
-	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), zap.NewNop())
+	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, newTestBot(t, stub.URL), nil, nil, zap.NewNop())
+	repo, _ := newTestStore(t)
+	storeSvc := store.New(repo, zap.NewNop())
 	service := webhook.New(
 		webhook.Config{SigningKey: testSigningKey},
 		forwarder,
 		cache.NewMemory(0),
+		storeSvc,
 		metrics,
 		zap.NewNop(),
 	)
@@ -521,5 +606,186 @@ func TestService_Forward_ConcurrentDuplicateForwardsOnce(t *testing.T) {
 
 	if got := counterValue(metrics, "duplicate"); got != 1 {
 		t.Fatalf("duplicate counter = %v, want 1", got)
+	}
+}
+
+// TestService_ForwardStoresMappingsForDeliveredPartsOnPartialFailure asserts a
+// failure on a later chunk of a split message still maps the part Telegram
+// accepted, and reports the failure: the device is told the delivery failed,
+// but a reply to the part that is already in the chat still resolves to the
+// sender.
+func TestService_ForwardStoresMappingsForDeliveredPartsOnPartialFailure(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	requests := 0
+
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if n == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":707}}`))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"stub failure"}`))
+	}))
+	t.Cleanup(stub.Close)
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		newTestBot(t, stub.URL),
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+	repo, _ := newTestStore(t)
+	storeSvc := store.New(repo, zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		cache.NewMemory(0),
+		storeSvc,
+		metrics,
+		zap.NewNop(),
+	)
+
+	// Well over the 4096-character Telegram limit (whatever the sender
+	// overhead), so the forward always splits and the second Telegram call is
+	// the one that fails.
+	err := service.Forward(context.Background(), testEventKey, testSender, strings.Repeat("a", 5000))
+	if err == nil {
+		t.Fatal("Forward() error = nil, want the failure of the second chunk")
+	}
+
+	if got := counterValue(metrics, "error"); got != 1 {
+		t.Fatalf("error counter = %v, want 1", got)
+	}
+
+	if got := testutil.ToFloat64(metrics.ForwardErrorsCounter()); got != 1 {
+		t.Fatalf("forward_errors counter = %v, want 1", got)
+	}
+
+	// The delivered part must be mapped even though the forward failed: this is
+	// the mapping a reply to the first bubble resolves through.
+	mapping, rerr := repo.Resolve(context.Background(), store.MessageRef{ChatID: testChatID, MessageID: 707})
+	if rerr != nil {
+		t.Fatalf("Resolve() of the delivered part error = %v, want the mapping stored", rerr)
+	}
+
+	if mapping.Phone != testSender {
+		t.Fatalf("mapping phone = %q, want %q", mapping.Phone, testSender)
+	}
+}
+
+// TestService_ForwardSurvivesStoreFailure pins the delivery semantics of a
+// mapping write that fails after Telegram already accepted the message: the SMS
+// is in the chat, so the webhook still answers 200. Failing the request instead
+// would make the device retry the delivery and forward the same SMS twice.
+func TestService_ForwardSurvivesStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	stub := newTelegramStub(t, http.StatusOK, 77)
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		newTestBot(t, stub.URL),
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+
+	repo, db := newTestStore(t)
+
+	// Closing the handle makes every later write fail with ErrDatabaseNotOpen.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	storeSvc := store.New(repo, zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		cache.NewMemory(0),
+		storeSvc,
+		metrics,
+		zap.NewNop(),
+	)
+
+	if err := service.Forward(context.Background(), testEventKey, testSender, testMessage); err != nil {
+		t.Fatalf("Forward() error = %v, want nil (the SMS is already in the chat)", err)
+	}
+
+	if got := counterValue(metrics, "ok"); got != 1 {
+		t.Fatalf("ok counter = %v, want 1", got)
+	}
+
+	if got := counterValue(metrics, "error"); got != 0 {
+		t.Fatalf("error counter = %v, want 0", got)
+	}
+
+	if got := testutil.ToFloat64(metrics.ForwardErrorsCounter()); got != 0 {
+		t.Fatalf("forward_errors counter = %v, want 0", got)
+	}
+}
+
+// TestService_ForwardKeepsLatestMapping asserts a repeated delivery to the same
+// Telegram message id replaces the mapping instead of failing, which keeps a
+// re-delivered webhook from being answered with an error.
+func TestService_ForwardKeepsLatestMapping(t *testing.T) {
+	t.Parallel()
+
+	metrics := webhook.NewMetricsWithRegisterer(prometheus.NewRegistry())
+	stub := newTelegramStub(t, http.StatusOK, 5)
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		newTestBot(t, stub.URL),
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+
+	repo, _ := newTestStore(t)
+	storeSvc := store.New(repo, zap.NewNop())
+	service := webhook.New(
+		webhook.Config{SigningKey: testSigningKey},
+		forwarder,
+		cache.NewMemory(0),
+		storeSvc,
+		metrics,
+		zap.NewNop(),
+	)
+
+	// Distinct event keys: the same Telegram message id arriving under two
+	// different deliveries must not be skipped by de-duplication.
+	for i, phone := range []string{"6505551212", "6505551213"} {
+		eventKey := "webhook-id:event-" + strconv.Itoa(i+1)
+		if err := service.Forward(context.Background(), eventKey, phone, testMessage); err != nil {
+			t.Fatalf("Forward() error = %v", err)
+		}
+	}
+
+	mapping, err := repo.Resolve(context.Background(), store.MessageRef{ChatID: testChatID, MessageID: 5})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if mapping.Phone != "6505551213" {
+		t.Fatalf("mapping phone = %q, want the last forwarded sender", mapping.Phone)
 	}
 }

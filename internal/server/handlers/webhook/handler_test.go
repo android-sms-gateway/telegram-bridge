@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	webhookhandler "github.com/android-sms-gateway/telegram-bridge/internal/server/handlers/webhook"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/boltfx"
 	"github.com/go-core-fx/cachefx/cache"
 	"github.com/go-core-fx/fiberfx"
 	"github.com/go-core-fx/fiberfx/validation"
@@ -85,6 +88,30 @@ type telegramSend struct {
 	ParseMode string `json:"parse_mode"`
 }
 
+// newTestRepo opens the mapping store the webhook service writes to after a
+// forward, exactly as pkg/boltfx and internal/store do in the serve graph.
+func newTestRepo(t *testing.T) *store.Repository {
+	t.Helper()
+
+	db, err := boltfx.New(boltfx.Config{URL: "bolt://" + filepath.Join(t.TempDir(), "handler.db")}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("close database: %v", cerr)
+		}
+	})
+
+	repo, err := store.NewRepository(store.Config{TTL: store.DefaultTTL}, db)
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+
+	return repo
+}
+
 // fixture bundles a fiber app with a stub Telegram API server. sent receives
 // one entry per sendMessage call the app performs; request receives one signal
 // per HTTP request that reaches the versioned group, so a test can wait until a
@@ -140,11 +167,21 @@ func newFixture(
 		t.Fatalf("create bot: %v", err)
 	}
 
-	forwarder := bridge.New(bridge.Config{ChatID: testChatID}, bot, zap.NewNop())
+	// Forward-only construction: the reply collaborators are nil because no case
+	// here answers a bubble.
+	forwarder := bridge.New(
+		bridge.Config{ChatID: testChatID},
+		bot,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
+	storeSvc := store.New(newTestRepo(t), zap.NewNop())
 	service := webhook.New(
 		webhook.Config{SigningKey: signingKey},
 		forwarder,
 		cache.NewMemory(0),
+		storeSvc,
 		m,
 		zap.NewNop(),
 	)
