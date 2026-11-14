@@ -362,8 +362,14 @@ func TestService_SendHonorsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	start := time.Now()
+
 	if _, err := service.Send(ctx, testPhone, testText); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Send() error = %v, want context.Canceled", err)
+	}
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Send() took %v, want prompt return after cancellation", elapsed)
 	}
 
 	if calls := server.calls(); calls > 1 {
