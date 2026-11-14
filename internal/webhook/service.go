@@ -8,6 +8,7 @@ import (
 
 	"github.com/android-sms-gateway/client-go/smsgateway"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
 	"github.com/go-core-fx/cachefx/cache"
 	"go.uber.org/zap"
 )
@@ -37,6 +38,8 @@ type Service struct {
 
 	bridgeSvc *bridge.Service
 
+	storeSvc *store.Service
+
 	eventCache cache.Cache
 
 	// forwardSem serializes check-forward-mark with a single slot. Holding it
@@ -62,10 +65,15 @@ type Service struct {
 //
 // eventCache is the webhook-owned de-duplication cache created by the module
 // through the application cache factory.
+//
+// storeSvc owns the reply mapping written after every successful forward: it is
+// the same store the reply path resolves from, so a forwarded message and a
+// reply to it always agree on the chat and the message id.
 func New(
 	cfg Config,
 	bridgeSvc *bridge.Service,
 	eventCache cache.Cache,
+	storeSvc *store.Service,
 	metrics *Metrics,
 	logger *zap.Logger,
 ) *Service {
@@ -73,6 +81,8 @@ func New(
 		signingKey: cfg.SigningKey,
 
 		bridgeSvc: bridgeSvc,
+
+		storeSvc: storeSvc,
 
 		eventCache: eventCache,
 
@@ -116,6 +126,19 @@ func (s *Service) Verify(body []byte, signature, timestamp string) error {
 // anyway: de-duplication is best-effort and must not stop message delivery.
 //
 // A delivered event keeps its marker for eventDedupTTL.
+//
+// After a successful delivery the reply mappings are written: the chat each
+// part went to plus the id Telegram gave it now resolve back to the sender,
+// which is what lets an answer to any part of the bubble leave as an SMS. The
+// same holds when a later part fails: the parts Telegram already accepted are
+// mapped before the error is reported, so a reply to them still resolves to
+// the sender even though the device is told the delivery failed.
+//
+// A mapping that cannot be written is logged and does not fail the request.
+// The SMS has already reached Telegram at that point, so answering with an
+// error would make the device retry the delivery and forward the same SMS a
+// second time. The only consequence is that replies to that one message stay
+// unresolvable, which the reply path reports to the operator in chat.
 func (s *Service) Forward(ctx context.Context, eventKey, phoneNumber, message string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, forwardWaitTimeout)
 	defer cancel()
@@ -135,7 +158,13 @@ func (s *Service) Forward(ctx context.Context, eventKey, phoneNumber, message st
 		return nil
 	}
 
-	if err := s.bridgeSvc.Forward(ctx, phoneNumber, message); err != nil {
+	forwarded, err := s.bridgeSvc.Forward(ctx, phoneNumber, message)
+
+	for _, part := range forwarded {
+		s.storeMapping(ctx, part, phoneNumber)
+	}
+
+	if err != nil {
 		s.metrics.IncForwardErrors()
 		s.metrics.IncTotal(resultError)
 
@@ -148,7 +177,10 @@ func (s *Service) Forward(ctx context.Context, eventKey, phoneNumber, message st
 
 	s.metrics.IncTotal(resultOK)
 
-	s.logger.Info("message forwarded")
+	s.logger.Info("message forwarded",
+		zap.Int64("chat_id", forwarded[0].ChatID),
+		zap.Int("parts", len(forwarded)),
+	)
 
 	return nil
 }
@@ -195,6 +227,39 @@ func (s *Service) markDelivered(ctx context.Context, eventKey string) {
 			"failed to record processed webhook event",
 			zap.String("event_key", eventKey),
 			zap.Error(err),
+		)
+	}
+}
+
+// storeMapping records the chat and Telegram message id of a delivered part
+// together with the SMS sender it was forwarded from. Every part of a split
+// message gets its own mapping, so an answer to any part resolves to a sender.
+//
+// The domain record carries no timestamps: the store stamps created_at and
+// expires_at from its own TTL, so the retention of a mapping is the store's
+// decision and not a constant duplicated in this package.
+//
+// The write runs on a context detached from the request: the caller's context
+// is the fasthttp request context, which fasthttp cancels on server shutdown
+// while the request is still in flight. Telegram has already accepted the part
+// at this point, so the mapping must be written even then — a dropped write
+// would leave a delivered bubble with no sender to reply to, and the device
+// still gets its 200 either way. The write is a local bbolt put, so detaching
+// the cancellation cannot strand it on a remote call.
+func (s *Service) storeMapping(ctx context.Context, forwarded bridge.Forwarded, phoneNumber string) {
+	mapping := store.Mapping{
+		MessageRef: store.MessageRef{
+			ChatID:    forwarded.ChatID,
+			MessageID: forwarded.MessageID,
+		},
+		Phone: phoneNumber,
+	}
+
+	if err := s.storeSvc.Put(context.WithoutCancel(ctx), mapping); err != nil {
+		s.logger.Error("reply mapping not stored, replies to this message cannot be routed",
+			zap.Error(err),
+			zap.Int64("chat_id", forwarded.ChatID),
+			zap.Int("telegram_message_id", forwarded.MessageID),
 		)
 	}
 }

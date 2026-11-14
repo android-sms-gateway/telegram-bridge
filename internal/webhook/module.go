@@ -19,7 +19,9 @@ const eventCacheName = "webhook-events"
 // The service is provided publicly so other modules (the server module's
 // webhook handler) can consume it; metrics and the event cache stay private to
 // this module. The HTTP handler itself lives in
-// internal/server/handlers/webhook and is registered by the server module.
+// internal/server/handlers/webhook and is registered by the server module. The
+// store service comes from internal/store, which owns the durable reply
+// mapping written after every forward.
 func Module() fx.Option {
 	return fx.Module(
 		"webhook",

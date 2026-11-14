@@ -90,7 +90,7 @@ What it does:
 
 ### Prerequisites
 
-* Go 1.25+
+* Go 1.26.7+
   ```sh
   go version
   ```
@@ -120,11 +120,20 @@ What it does:
    ```sh
    cp .env.example .env
    ```
-4. (Optional) Generate the OpenAPI docs.
+4. Create the data directory the storage URL points at. The default
+   `STORAGE__URL=bolt://data/telegram-bridge.db` stores the reply mappings in
+   `./data`, and the service refuses to start when the directory of that file
+   does not exist.
+   ```sh
+   mkdir -p data
+   ```
+   For a custom `STORAGE__URL`, create the parent directory of that file path
+   instead.
+5. (Optional) Generate the OpenAPI docs.
    ```sh
    make gen
    ```
-5. Build the binary.
+6. Build the binary.
    ```sh
    make build
    ```

@@ -16,6 +16,8 @@ github.com/bytedance/sonic v1.15.2 h1:90H+rcF/FwLXwfB1cudOLq/je83n683Utf4Cbp0xHC
 github.com/bytedance/sonic v1.15.2/go.mod h1:mT2NbXunuaEbnZ+mRIX/vYqKISmgEuHFDI4UzmKx2SA=
 github.com/bytedance/sonic/loader v0.5.2 h1:0QtP1gevc1OZ6/H8Lb9BRZiCXd1Ftjd3OKuj1T1lBIo=
 github.com/bytedance/sonic/loader v0.5.2/go.mod h1:AR4NYCk5DdzZizZ5djGqQ92eEhCCcdf5x77udYiSJRo=
+github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
+github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
@@ -31,6 +33,8 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/gabriel-vasile/mimetype v1.4.13 h1:46nXokslUBsAJE/wMsp5gtO500a4F3Nkz9Ufpk2AcUM=
 github.com/gabriel-vasile/mimetype v1.4.13/go.mod h1:d+9Oxyo1wTzWdyVUPMmXFvp4F9tea18J8ufA774AB3s=
+github.com/go-core-fx/boltfx v0.0.0-20261109044402-6d562b803a2b h1:bLwrd7qTU/541t3O6CTWGWqiP/KiHFowjimw9IVDOi0=
+github.com/go-core-fx/boltfx v0.0.0-20261109044402-6d562b803a2b/go.mod h1:kwL8MEZ0XBBZrvRkTwr79xHqAYJ8CiOM4MwgjyyLT+M=
 github.com/go-core-fx/cachefx v0.2.0 h1:uxzAruGSZcKakF8Qiv8iPYF1j2Il8/cYBXMHuuuLSi4=
 github.com/go-core-fx/cachefx v0.2.0/go.mod h1:8CCFbfbojyoUEvnaExvpXha+wnA2U0wPHmHJots00BA=
 github.com/go-core-fx/config v0.1.0 h1:uKmo+mTt5a8Gtusb7Xf4gkrGcLIbm2doTEUMkdd6oGo=
@@ -43,8 +47,8 @@ github.com/go-core-fx/healthfx v0.1.0 h1:m/BkwnNTqxZPDNhgXApI3FwbhKnQDb9hd0R7s8m
 github.com/go-core-fx/healthfx v0.1.0/go.mod h1:MxESD5T1NpBqcuVwn6bWHPqMdvhkzI+cKbJClftaRfI=
 github.com/go-core-fx/logger v0.0.1 h1:e3iJPEfV09fAZnVdROhcpDEbw7DHaNfY/OWCLX0wipA=
 github.com/go-core-fx/logger v0.0.1/go.mod h1:dvExTnpqUry/Qr0x0rg8UiKVUPv3PBb1JT/0llX5NWc=
-github.com/go-core-fx/telegofx v0.4.0 h1:ZcsaG08l9ny9cObfQMuk2MYzK4Xkrp9JDOxfCq+aVdQ=
-github.com/go-core-fx/telegofx v0.4.0/go.mod h1:VmmuIQkjJQnKc7KjCMHR/Zrzt4STMHFJzGtu1Q9z2ug=
+github.com/go-core-fx/telegofx v0.4.1-0.20261011015657-707f026cd640 h1:EKChQw5LCrMC+nvWuhco4xMebNiOYf1orb5ZBZOaKK4=
+github.com/go-core-fx/telegofx v0.4.1-0.20261011015657-707f026cd640/go.mod h1:VmmuIQkjJQnKc7KjCMHR/Zrzt4STMHFJzGtu1Q9z2ug=
 github.com/go-core-fx/validatorfx v0.0.2 h1:J+POBsdqyT2Hd3TZHgJ+0eBtCPHhHff8TJLcGowQ0Ew=
 github.com/go-core-fx/validatorfx v0.0.2/go.mod h1:1VtQoOEzBo3oapXgRFA65H+zSKvmCvb6yfAcdwpqSlE=
 github.com/go-logr/logr v1.4.4 h1:tG4xh9yMsRCAiodLVTxyrkzSZ9+o0L1Kg/+cPVcbP/8=
@@ -177,6 +181,8 @@ github.com/valyala/fasthttp v1.78.0 h1:tKfLdx7cD8HZOTP1wc2OpbQMbgO1HP12J0y/XMdyW
 github.com/valyala/fasthttp v1.78.0/go.mod h1:8NXUY/ZXyjqEWN5cbfIdAAv+ES+5yfcl2EGNo872KzQ=
 github.com/valyala/fastjson v1.6.10 h1:/yjJg8jaVQdYR3arGxPE2X5z89xrlhS0eGXdv+ADTh4=
 github.com/valyala/fastjson v1.6.10/go.mod h1:e6FubmQouUNP73jtMLmcbxS6ydWIpOfhz34TSfO3JaE=
+go.etcd.io/bbolt v1.5.0 h1:S7GAl7Fxv12yohbwFfIbQCGDWbQbtDGPET4P/bD4lxU=
+go.etcd.io/bbolt v1.5.0/go.mod h1:mkltfYE5aUHQxUct9N9V+Kp7aSjFqjgrhcXIS70Lrdk=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.47.0 h1:j7ALJ/zgkS7Z6aeJW09p8VC9804bC+PpeTfCD4XPnOM=
