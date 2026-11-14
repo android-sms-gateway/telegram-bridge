@@ -489,6 +489,16 @@ func TestReplyAllowlistMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			clearChatIDEnv(t)
+
+			for _, key := range []string{"TELEGRAM__TOKEN", "TELEGRAM__PROXY_URL"} {
+				t.Setenv(key, "")
+
+				if err := os.Unsetenv(key); err != nil {
+					t.Fatalf("unset %s: %v", key, err)
+				}
+			}
+
 			t.Setenv("BOT__ALLOWED_USER_IDS", tt.raw)
 
 			if !tt.set {
