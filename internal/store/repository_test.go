@@ -345,6 +345,16 @@ func TestResolveExpiredMapping(t *testing.T) {
 		{name: "still valid", tgMessageID: testMsgID + 1},
 	}
 
+	// Expiry is enforced on read: the expired record is still on disk, only the
+	// periodic cleanup removes it. Registered as a cleanup because parallel
+	// subtests resume only after this function returns, so an assertion placed
+	// after the loop would run before either Resolve call.
+	t.Cleanup(func() {
+		if count := countBucket(t, db, mappingsBucketName); count != 2 {
+			t.Fatalf("mappings bucket holds %d records, want 2 (read must not delete)", count)
+		}
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -362,12 +372,6 @@ func TestResolveExpiredMapping(t *testing.T) {
 				t.Fatalf("Resolve() error = %v", err)
 			}
 		})
-	}
-
-	// Expiry is enforced on read: the expired record is still on disk, only the
-	// periodic cleanup removes it.
-	if count := countBucket(t, db, mappingsBucketName); count != 2 {
-		t.Fatalf("mappings bucket holds %d records, want 2 (read must not delete)", count)
 	}
 }
 
