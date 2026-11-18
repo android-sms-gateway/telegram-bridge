@@ -13,10 +13,21 @@ RUN addgroup -g 1000 appuser && \
 # Set the Current Working Directory inside the container
 WORKDIR /app
 
+# Create the storage directory the bbolt store opens (STORAGE__URL default
+# bolt://data/telegram-bridge.db resolves relative to the working directory);
+# the service fails fast when the parent directory does not exist
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+
 # Copy the Pre-built binary file from GoReleaser
 COPY --chown=appuser:appuser $TARGETPLATFORM/$BINARY_NAME ./server
 
 USER appuser
+
+# Persist reply mappings across container recreations
+VOLUME ["/app/data"]
+
+# HTTP server: health, metrics, OpenAPI docs and the SMSGate webhook
+EXPOSE 3000
 
 # Command to run the executable
 ENTRYPOINT ["/app/server"]

@@ -1,23 +1,29 @@
 module github.com/android-sms-gateway/telegram-bridge
 
-go 1.26.0
+go 1.26.11
 
 require (
-	github.com/android-sms-gateway/client-go v1.16.4-0.20261021050309-3ad785299ad0
+	github.com/android-sms-gateway/client-go v1.17.0
+	github.com/cenkalti/backoff/v5 v5.0.3
+	github.com/go-core-fx/boltfx v0.0.1
 	github.com/go-core-fx/cachefx v0.2.0
 	github.com/go-core-fx/config v0.1.0
 	github.com/go-core-fx/fiberfx v0.6.0
+	github.com/go-core-fx/fxutil v0.0.2
 	github.com/go-core-fx/healthfx v0.1.0
+	github.com/go-core-fx/httpfx v0.2.1
 	github.com/go-core-fx/logger v0.0.1
-	github.com/go-core-fx/telegofx v0.4.0
+	github.com/go-core-fx/telegofx v0.7.0
 	github.com/go-core-fx/validatorfx v0.0.2
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gofiber/fiber/v2 v2.52.16
-	github.com/mymmrac/telego v1.11.2
+	github.com/google/uuid v1.6.0
+	github.com/mymmrac/telego v1.13.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/samber/lo v1.53.0
 	github.com/swaggo/swag v1.16.6
 	github.com/urfave/cli/v3 v3.10.1
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 )
@@ -27,15 +33,14 @@ require (
 	github.com/ansrivas/fiberprometheus/v2 v2.18.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
-	github.com/bytedance/sonic v1.15.2 // indirect
-	github.com/bytedance/sonic/loader v0.5.2 // indirect
+	github.com/bytedance/sonic v1.15.5 // indirect
+	github.com/bytedance/sonic/loader v0.5.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
-	github.com/go-core-fx/fxutil v0.0.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
 	github.com/go-openapi/spec v0.22.6 // indirect
@@ -49,13 +54,12 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/gofiber/contrib/fiberzap/v2 v2.1.6 // indirect
 	github.com/gofiber/swagger v1.1.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
-	github.com/grbit/go-json v0.11.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/klauspost/compress v1.20.3 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/parsers/dotenv v1.1.1 // indirect
 	github.com/knadh/koanf/parsers/yaml v1.1.0 // indirect
@@ -86,12 +90,12 @@ require (
 	go.uber.org/dig v1.19.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/arch v0.30.0 // indirect
+	golang.org/x/arch v0.33.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect

@@ -7,12 +7,17 @@ import (
 	"testing"
 	"time"
 
+	botconfig "github.com/android-sms-gateway/telegram-bridge/internal/bot/config"
 	"github.com/android-sms-gateway/telegram-bridge/internal/bridge"
 	"github.com/android-sms-gateway/telegram-bridge/internal/config"
+	"github.com/android-sms-gateway/telegram-bridge/internal/smsgate"
+	"github.com/android-sms-gateway/telegram-bridge/internal/store"
+	"github.com/android-sms-gateway/telegram-bridge/internal/telegram"
 	"github.com/android-sms-gateway/telegram-bridge/internal/webhook"
+	"github.com/go-core-fx/boltfx"
 	"github.com/go-core-fx/cachefx"
+	"github.com/go-core-fx/httpfx"
 	"github.com/go-core-fx/telegofx"
-	"github.com/mymmrac/telego"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
@@ -21,14 +26,18 @@ import (
 // against the real Telegram API: the graph under test only constructs the bot.
 const testToken = "1234567890:AAAAAAAAAABBBBBBBBBBCCCCCCCCCCDDDDD"
 
-// newBotError wires the config module into telegofx.New and forces bot
-// construction, mirroring the serve graph without starting the poller.
+// newBotError wires the config, httpfx and telegram modules into
+// telegofx.New and forces bot construction, mirroring the serve graph
+// without starting the poller. Bot construction fails whenever the
+// transport config the config module mapped cannot be turned into the
+// bot's HTTP client.
 func newBotError() error {
 	app := fx.New(
 		fx.NopLogger,
 		config.Module(),
+		httpfx.Module(),
+		telegram.Module(),
 		fx.Supply(zap.NewNop()),
-		fx.Supply([]telego.BotOption{}),
 		fx.Provide(telegofx.New),
 		fx.Invoke(func(_ *telegofx.Bot) {}),
 	)
@@ -36,10 +45,15 @@ func newBotError() error {
 	return app.Err()
 }
 
-// TestTelegofxProxyMapping asserts that the raw TELEGRAM__PROXY_URL value reaches
-// telegofx.Config.ProxyURL and that telegofx only accepts SOCKS5 proxy URLs.
+// TestTelegofxProxyMapping asserts that the raw TELEGRAM__PROXY_URL value
+// shapes the bot's HTTP client and that the bot's transport only accepts
+// SOCKS5 proxy URLs: anything else fails startup through the telegram
+// module.
 func TestTelegofxProxyMapping(t *testing.T) {
 	t.Setenv("TELEGRAM__TOKEN", testToken)
+	// A valid request timeout keeps the telegram module's timeout guard
+	// out of these cases; TestTelegramTimeoutValidation covers it.
+	t.Setenv("TELEGRAM__TIMEOUT", "30s")
 
 	tests := []struct {
 		name    string
@@ -75,25 +89,25 @@ func TestTelegofxProxyMapping(t *testing.T) {
 			name:    "http proxy is rejected",
 			unset:   false,
 			proxy:   "http://127.0.0.1:8080",
-			wantErr: `unsupported proxy scheme "http"`,
+			wantErr: `invalid proxy URL: "http://127.0.0.1:8080"`,
 		},
 		{
 			name:    "https proxy is rejected",
 			unset:   false,
 			proxy:   "https://127.0.0.1:8443",
-			wantErr: `unsupported proxy scheme "https"`,
+			wantErr: `invalid proxy URL: "https://127.0.0.1:8443"`,
 		},
 		{
-			name:    "missing scheme is a parse error",
+			name:    "missing scheme is rejected",
 			unset:   false,
 			proxy:   "127.0.0.1:8080",
-			wantErr: `parse proxy url: parse "127.0.0.1:8080"`,
+			wantErr: `invalid proxy URL: "127.0.0.1:8080"`,
 		},
 		{
 			name:    "socks5 without host is rejected",
 			unset:   false,
 			proxy:   "socks5://",
-			wantErr: "proxy host is empty",
+			wantErr: "invalid proxy URL: empty hostname",
 		},
 	}
 
@@ -130,14 +144,89 @@ func TestTelegofxProxyMapping(t *testing.T) {
 	}
 }
 
+// TestTelegramTimeoutValidation asserts TELEGRAM__TIMEOUT is enforced where
+// the bot's HTTP client is built: the request timeout must outlive telego's
+// 8s getUpdates long-poll hold, so anything at or below it fails startup,
+// while the unset key falls back to the raw default.
+func TestTelegramTimeoutValidation(t *testing.T) {
+	t.Setenv("TELEGRAM__TOKEN", testToken)
+	// No proxy in these cases: the guard under test is the timeout alone.
+	t.Setenv("TELEGRAM__PROXY_URL", "")
+
+	tests := []struct {
+		name    string
+		unset   bool
+		timeout string
+		wantErr string
+	}{
+		{
+			name:    "unset timeout falls back to the raw default",
+			unset:   true,
+			timeout: "",
+			wantErr: "",
+		},
+		{
+			name:    "timeout above the long-poll hold is accepted",
+			unset:   false,
+			timeout: "60s",
+			wantErr: "",
+		},
+		{
+			name:    "timeout at the long-poll hold is rejected",
+			unset:   false,
+			timeout: "8s",
+			wantErr: "config invalid: telegram timeout 8s must be greater than the 8s getUpdates long-poll hold",
+		},
+		{
+			name:    "timeout below the long-poll hold is rejected",
+			unset:   false,
+			timeout: "5s",
+			wantErr: "config invalid: telegram timeout 5s must be greater than the 8s getUpdates long-poll hold",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// t.Setenv registers the restore hook; Unsetenv then leaves the
+			// variable genuinely absent for the default-config case.
+			t.Setenv("TELEGRAM__TIMEOUT", tt.timeout)
+
+			if tt.unset {
+				if err := os.Unsetenv("TELEGRAM__TIMEOUT"); err != nil {
+					t.Fatalf("unset TELEGRAM__TIMEOUT: %v", err)
+				}
+			}
+
+			err := newBotError()
+
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("bot construction error = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatal("bot construction error = nil, want error")
+			}
+
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("bot construction error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // loadModuleConfigs builds the config module and captures every value it
 // provides to a consumer, so one test can assert the whole raw -> consumer
 // mapping without constructing a bot or an HTTP server.
-func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Config, cachefx.Config) {
+func loadModuleConfigs(t *testing.T) (telegofx.Config, telegram.Config, bridge.Config, webhook.Config, cachefx.Config) {
 	t.Helper()
 
 	var (
 		gotTelegofx telegofx.Config
+		gotTelegram telegram.Config
 		gotBridge   bridge.Config
 		gotWebhook  webhook.Config
 		gotCache    cachefx.Config
@@ -146,8 +235,9 @@ func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Co
 	app := fx.New(
 		fx.NopLogger,
 		config.Module(),
-		fx.Invoke(func(tf telegofx.Config, bg bridge.Config, wh webhook.Config, cc cachefx.Config) {
+		fx.Invoke(func(tf telegofx.Config, tg telegram.Config, bg bridge.Config, wh webhook.Config, cc cachefx.Config) {
 			gotTelegofx = tf
+			gotTelegram = tg
 			gotBridge = bg
 			gotWebhook = wh
 			gotCache = cc
@@ -158,34 +248,56 @@ func loadModuleConfigs(t *testing.T) (telegofx.Config, bridge.Config, webhook.Co
 		t.Fatalf("config module error = %v", err)
 	}
 
-	return gotTelegofx, gotBridge, gotWebhook, gotCache
+	return gotTelegofx, gotTelegram, gotBridge, gotWebhook, gotCache
 }
 
 // TestModuleConfigMapping asserts the raw koanf/env surface reaches each
 // consumer in the shape that consumer takes: the telegram section as
-// telegofx.Config, the bridge section as bridge.Config, the cache section as
-// cachefx.Config, the webhook signing key as webhook.Config.
+// telegofx.Config plus the transport as telegram.Config, the bot allowlist
+// as botconfig.Config, the bridge config as bridge.Config, the cache
+// section as cachefx.Config and the webhook signing key as webhook.Config.
 func TestModuleConfigMapping(t *testing.T) {
 	t.Setenv("TELEGRAM__TOKEN", testToken)
 	t.Setenv("TELEGRAM__PROXY_URL", "socks5h://127.0.0.1:1080")
+	t.Setenv("TELEGRAM__TIMEOUT", "45s")
+	t.Setenv("BOT__ALLOWED_USER_IDS", "[111,222]")
 	t.Setenv("BRIDGE__CHAT_ID", "123456789")
 	t.Setenv("CACHE__URL", "redis://127.0.0.1:6379")
 	t.Setenv("CACHE__SWEEP_INTERVAL", "30s")
 	t.Setenv("SMSGATE__WEBHOOK__SIGNING_KEY", "env-signing-key")
 
-	gotTelegofx, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
+	gotTelegofx, gotTelegram, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
 
 	wantTelegofx := telegofx.Config{
-		Token:    testToken,
-		ProxyURL: "socks5h://127.0.0.1:1080",
-		Mode:     telegofx.ModePolling,
+		Token: testToken,
+		Mode:  telegofx.ModePolling,
 	}
 	if gotTelegofx != wantTelegofx {
 		t.Fatalf("telegofx.Config = %+v, want %+v", gotTelegofx, wantTelegofx)
 	}
 
-	if gotBridge != (bridge.Config{ChatID: 123456789}) {
-		t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 123456789})
+	// The proxy and the request timeout leave the telegram section as the
+	// bot's transport config, which the telegram module validates and turns
+	// into the bot's HTTP client.
+	wantTelegram := telegram.Config{
+		ProxyURL: "socks5h://127.0.0.1:1080",
+		Timeout:  45 * time.Second,
+	}
+	if gotTelegram != wantTelegram {
+		t.Fatalf("telegram.Config = %+v, want %+v", gotTelegram, wantTelegram)
+	}
+
+	// The bot section carries the reply allowlist alone, and the bridge config
+	// carries the forward target alone: neither setting leaks into the other.
+	wantBridge := bridge.Config{ChatID: 123456789}
+	if gotBridge != wantBridge {
+		t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, wantBridge)
+	}
+
+	gotBot := loadBotConfig(t)
+	wantBot := botconfig.Config{AllowedUserIDs: []int64{111, 222}}
+	if !slices.Equal(gotBot.AllowedUserIDs, wantBot.AllowedUserIDs) {
+		t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", gotBot.AllowedUserIDs, wantBot.AllowedUserIDs)
 	}
 
 	wantCache := cachefx.Config{URL: "redis://127.0.0.1:6379", SweepInterval: 30 * time.Second}
@@ -196,6 +308,25 @@ func TestModuleConfigMapping(t *testing.T) {
 	if gotWebhook != (webhook.Config{SigningKey: "env-signing-key"}) {
 		t.Fatalf("webhook.Config = %+v, want %+v", gotWebhook, webhook.Config{SigningKey: "env-signing-key"})
 	}
+}
+
+// loadBotConfig builds the config module and captures the bot module config.
+func loadBotConfig(t *testing.T) botconfig.Config {
+	t.Helper()
+
+	var gotBot botconfig.Config
+
+	app := fx.New(
+		fx.NopLogger,
+		config.Module(),
+		fx.Invoke(func(b botconfig.Config) { gotBot = b }),
+	)
+
+	if err := app.Err(); err != nil {
+		t.Fatalf("config module error = %v", err)
+	}
+
+	return gotBot
 }
 
 // clearChatIDEnv removes both spellings of the forward target from the process
@@ -255,10 +386,10 @@ func TestBridgeChatIDSectionIsolation(t *testing.T) {
 				t.Setenv(key, value)
 			}
 
-			_, gotBridge, _, _ := loadModuleConfigs(t)
+			_, _, gotBridge, _, _ := loadModuleConfigs(t)
 
-			if gotBridge != (bridge.Config{ChatID: tt.want}) {
-				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: tt.want})
+			if gotBridge.ChatID != tt.want {
+				t.Fatalf("bridge.Config.ChatID = %d, want %d", gotBridge.ChatID, tt.want)
 			}
 		})
 	}
@@ -271,6 +402,7 @@ func TestModuleConfigDefaults(t *testing.T) {
 	envKeys := []string{
 		"TELEGRAM__TOKEN",
 		"TELEGRAM__PROXY_URL",
+		"TELEGRAM__TIMEOUT",
 		"BRIDGE__CHAT_ID",
 		"TELEGRAM__CHAT_ID",
 		"CACHE__URL",
@@ -287,18 +419,18 @@ func TestModuleConfigDefaults(t *testing.T) {
 			name:  "unset env uses raw defaults",
 			unset: envKeys,
 			wantTelegofx: telegofx.Config{
-				Token:    "",
-				ProxyURL: "",
-				Mode:     telegofx.ModePolling,
+				Token: "",
+				Mode:  telegofx.ModePolling,
 			},
 		},
 		{
+			// The duration keys are unset rather than emptied here: an empty
+			// env value does not decode into their raw defaults.
 			name:  "empty env matches raw defaults",
-			unset: []string{"CACHE__URL", "CACHE__SWEEP_INTERVAL"},
+			unset: []string{"CACHE__URL", "CACHE__SWEEP_INTERVAL", "TELEGRAM__TIMEOUT"},
 			wantTelegofx: telegofx.Config{
-				Token:    "",
-				ProxyURL: "",
-				Mode:     telegofx.ModePolling,
+				Token: "",
+				Mode:  telegofx.ModePolling,
 			},
 		},
 	}
@@ -315,14 +447,19 @@ func TestModuleConfigDefaults(t *testing.T) {
 				}
 			}
 
-			gotTelegofx, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
+			gotTelegofx, gotTelegram, gotBridge, gotWebhook, gotCache := loadModuleConfigs(t)
 
 			if gotTelegofx != tt.wantTelegofx {
 				t.Fatalf("telegofx.Config = %+v, want %+v", gotTelegofx, tt.wantTelegofx)
 			}
 
-			if gotBridge != (bridge.Config{ChatID: 0}) {
-				t.Fatalf("bridge.Config = %+v, want %+v", gotBridge, bridge.Config{ChatID: 0})
+			wantTelegram := telegram.Config{ProxyURL: "", Timeout: 30 * time.Second}
+			if gotTelegram != wantTelegram {
+				t.Fatalf("telegram.Config = %+v, want %+v (raw defaults)", gotTelegram, wantTelegram)
+			}
+
+			if gotBridge.ChatID != 0 {
+				t.Fatalf("bridge.Config.ChatID = %d, want 0 (no forward target)", gotBridge.ChatID)
 			}
 
 			wantCache := cachefx.Config{URL: "memory://", SweepInterval: time.Minute}
@@ -334,5 +471,271 @@ func TestModuleConfigDefaults(t *testing.T) {
 				t.Fatalf("webhook.Config = %+v, want empty signing key (fail-closed)", gotWebhook)
 			}
 		})
+	}
+}
+
+// TestStorageConfigMapping asserts the raw storage section reaches pkg/boltfx
+// as the database URL, including its default, while the mapping TTL stays the
+// store's own default because no raw key carries it.
+func TestStorageConfigMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		unset   bool
+		wantURL string
+	}{
+		{
+			name:    "absolute url is mapped",
+			url:     "bolt:///var/lib/telegram-bridge/store.db",
+			unset:   false,
+			wantURL: "bolt:///var/lib/telegram-bridge/store.db",
+		},
+		{
+			name:    "relative url is mapped",
+			url:     "bolt://data/custom.db",
+			unset:   false,
+			wantURL: "bolt://data/custom.db",
+		},
+		{
+			name:    "unset env falls back to the raw default",
+			url:     "",
+			unset:   true,
+			wantURL: "bolt://data/telegram-bridge.db",
+		},
+		{
+			// An environment variable that is present but empty overrides the
+			// raw default, and the database is then opened with an empty URL.
+			name:    "empty env overrides the default",
+			url:     "",
+			unset:   false,
+			wantURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("STORAGE__URL", tt.url)
+
+			if tt.unset {
+				// t.Setenv registers the restore hook; Unsetenv then leaves the
+				// variable genuinely absent.
+				if err := os.Unsetenv("STORAGE__URL"); err != nil {
+					t.Fatalf("unset STORAGE__URL: %v", err)
+				}
+			}
+
+			var (
+				gotBolt  boltfx.Config
+				gotStore store.Config
+			)
+
+			app := fx.New(
+				fx.NopLogger,
+				config.Module(),
+				fx.Invoke(func(b boltfx.Config, s store.Config) {
+					gotBolt = b
+					gotStore = s
+				}),
+			)
+
+			if err := app.Err(); err != nil {
+				t.Fatalf("config module error = %v", err)
+			}
+
+			if gotBolt.URL != tt.wantURL {
+				t.Fatalf("boltfx.Config.URL = %q, want %q", gotBolt.URL, tt.wantURL)
+			}
+
+			if gotStore.TTL != store.DefaultTTL {
+				t.Fatalf("store.Config.TTL = %v, want %v", gotStore.TTL, store.DefaultTTL)
+			}
+		})
+	}
+}
+
+// TestReplyAllowlistMapping asserts the raw bot.allowed_user_ids key reaches the
+// bot module config as a list of Telegram ids, including the fail-closed
+// default, and that it never leaks into the telegofx client config or the
+// bridge config.
+func TestReplyAllowlistMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		set  bool
+		raw  string
+		want []int64
+	}{
+		{
+			name: "json array is decoded",
+			set:  true,
+			raw:  "[111,222]",
+			want: []int64{111, 222},
+		},
+		{
+			name: "negative supergroup id is kept",
+			set:  true,
+			raw:  "[-1001234567890]",
+			want: []int64{-1001234567890},
+		},
+		{
+			name: "empty array closes every reply",
+			set:  true,
+			raw:  "[]",
+			want: []int64{},
+		},
+		{
+			name: "unset key falls back to the fail-closed default",
+			set:  false,
+			raw:  "",
+			want: []int64{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearChatIDEnv(t)
+
+			for _, key := range []string{"TELEGRAM__TOKEN", "TELEGRAM__PROXY_URL"} {
+				t.Setenv(key, "")
+
+				if err := os.Unsetenv(key); err != nil {
+					t.Fatalf("unset %s: %v", key, err)
+				}
+			}
+
+			t.Setenv("BOT__ALLOWED_USER_IDS", tt.raw)
+
+			if !tt.set {
+				// t.Setenv registers the restore hook; Unsetenv then leaves the
+				// variable genuinely absent.
+				if err := os.Unsetenv("BOT__ALLOWED_USER_IDS"); err != nil {
+					t.Fatalf("unset BOT__ALLOWED_USER_IDS: %v", err)
+				}
+			}
+
+			var (
+				gotBot    botconfig.Config
+				gotTelego telegofx.Config
+				gotBridge bridge.Config
+			)
+
+			app := fx.New(
+				fx.NopLogger,
+				config.Module(),
+				fx.Invoke(func(b botconfig.Config, tf telegofx.Config, bg bridge.Config) {
+					gotBot = b
+					gotTelego = tf
+					gotBridge = bg
+				}),
+			)
+
+			if err := app.Err(); err != nil {
+				t.Fatalf("config module error = %v", err)
+			}
+
+			if !slices.Equal(gotBot.AllowedUserIDs, tt.want) {
+				t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", gotBot.AllowedUserIDs, tt.want)
+			}
+
+			// telegofx.Config has no allowlist field: the raw value must not turn
+			// into part of the library-owned client config, nor into part of the
+			// bridge config, which now carries the forward target only.
+			if gotTelego.Token != "" {
+				t.Fatalf("telegofx.Config = %+v, want it untouched by the allowlist", gotTelego)
+			}
+
+			if gotBridge != (bridge.Config{ChatID: 0}) {
+				t.Fatalf("bridge.Config = %+v, want the forward target only", gotBridge)
+			}
+		})
+	}
+}
+
+// TestAllowedUserIDsSectionIsolation asserts the allowlist is read from the bot
+// section only: BOT__ALLOWED_USER_IDS reaches botconfig.Config, while the former
+// TELEGRAM__ALLOWED_USER_IDS of the combined telegram section is inert, the same
+// way TELEGRAM__CHAT_ID is for the forward target.
+func TestAllowedUserIDsSectionIsolation(t *testing.T) {
+	tests := []struct {
+		name string
+		set  map[string]string
+		want []int64
+	}{
+		{
+			name: "bot key is mapped",
+			set:  map[string]string{"BOT__ALLOWED_USER_IDS": "[111]"},
+			want: []int64{111},
+		},
+		{
+			name: "legacy telegram key is inert",
+			set:  map[string]string{"TELEGRAM__ALLOWED_USER_IDS": "[111]"},
+			want: []int64{},
+		},
+		{
+			name: "both keys set keeps the bot one",
+			set:  map[string]string{"TELEGRAM__ALLOWED_USER_IDS": "[1]", "BOT__ALLOWED_USER_IDS": "[42]"},
+			want: []int64{42},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAllowedUserIDsEnv(t)
+
+			for key, value := range tt.set {
+				t.Setenv(key, value)
+			}
+
+			if got := loadBotConfig(t).AllowedUserIDs; !slices.Equal(got, tt.want) {
+				t.Fatalf("botconfig.Config.AllowedUserIDs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// clearAllowedUserIDsEnv removes both spellings of the reply allowlist from the
+// process environment for the duration of the test: BOT__ALLOWED_USER_IDS is the
+// bot section key, TELEGRAM__ALLOWED_USER_IDS the key of the former telegram
+// section, which the raw config no longer declares.
+func clearAllowedUserIDsEnv(t *testing.T) {
+	t.Helper()
+
+	for _, key := range []string{"BOT__ALLOWED_USER_IDS", "TELEGRAM__ALLOWED_USER_IDS"} {
+		t.Setenv(key, "")
+
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+	}
+}
+
+// TestSMSGateConfigMapping asserts the raw smsgate server API section reaches the
+// smsgate module config, with the per-attempt timeout left on the module
+// default because no raw key carries it.
+func TestSMSGateConfigMapping(t *testing.T) {
+	t.Setenv("SMSGATE__BASE_URL", "https://api.example.com/3rdparty/v1")
+	t.Setenv("SMSGATE__USERNAME", "env-user")
+	t.Setenv("SMSGATE__PASSWORD", "env-password")
+
+	var got smsgate.Config
+
+	app := fx.New(
+		fx.NopLogger,
+		config.Module(),
+		fx.Invoke(func(s smsgate.Config) { got = s }),
+	)
+
+	if err := app.Err(); err != nil {
+		t.Fatalf("config module error = %v", err)
+	}
+
+	want := smsgate.Config{
+		BaseURL:  "https://api.example.com/3rdparty/v1",
+		Username: "env-user",
+		Password: "env-password",
+
+		Timeout: smsgate.DefaultTimeout,
+	}
+	if got != want {
+		t.Fatalf("smsgate.Config = %+v, want %+v", got, want)
 	}
 }

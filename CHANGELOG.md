@@ -6,6 +6,33 @@ All notable changes to this project are documented in this file.
 
 ### New Features
 
+#### Telegram replies
+
+- **Telegram replies** — replying with text to a forwarded message queues an SMS
+  to the original sender through the SMSGate server API. Replies work on any part
+  of a split message and are acknowledged in chat with the recipient and the
+  SMSGate message id.
+- **Operator allowlist** — `BOT__ALLOWED_USER_IDS` lists the Telegram user ids
+  allowed to reply. An empty list is fail-closed: replies are filtered out before
+  they reach the bridge, and a warning naming the key is logged at startup.
+  `/start` still answers everyone.
+- **SMSGate API configuration** — `SMSGATE__BASE_URL`, `SMSGATE__USERNAME` and
+  `SMSGATE__PASSWORD` set the server API and credentials used by the reply path.
+  Forwarding keeps working without them; only replies fail.
+
+#### Reply mapping storage
+
+- **Durable mappings** — each delivered Telegram message is stored in an embedded
+  bbolt database at `STORAGE__URL` with a 7-day lifetime, so replies survive
+  restarts. The parent directory of the database file must exist before startup.
+- **Configuration** — `STORAGE__URL` selects the database file (default
+  `bolt://data/telegram-bridge.db`), and `TELEGRAM__TIMEOUT` bounds bot API
+  requests (default `30s`, must exceed the 8s long-poll hold).
+
+## [0.0.3] - 2026-11-13
+
+### New Features
+
 #### Webhook event de-duplication
 
 - **Event de-duplication** — `sms:received` events are de-duplicated by envelope
