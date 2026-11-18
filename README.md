@@ -35,9 +35,12 @@
 - [Features](#features)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
+  - [Run with Docker](#run-with-docker)
+  - [Run a pre-built binary](#run-a-pre-built-binary)
+  - [Build from source](#build-from-source)
 - [Usage](#usage)
   - [Sending a webhook](#sending-a-webhook)
+  - [Replying to a forwarded message](#replying-to-a-forwarded-message)
 - [Configuration](#configuration)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
@@ -58,6 +61,8 @@ What it does:
 * Rejects any delivery that is not correctly signed.
 * Sends the sender number and message text to a Telegram chat.
 * Splits long messages so they fit Telegram's limits.
+* Lets allowed Telegram users reply to a forwarded message, sending the answer as an SMS through the SMSGate server API.
+* Remembers forwarded messages for 7 days so a reply still resolves to the right sender after a restart.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -79,6 +84,8 @@ What it does:
 * **Signature verification** — authenticates every request with an HMAC-SHA256 signature and rejects requests whose timestamp falls outside a 5-minute window. The window narrows but does not eliminate replay; delivery is at-least-once. An empty signing key rejects everything.
 * **Event de-duplication** — a redelivered event is acknowledged but not forwarded twice. Deliveries are keyed by webhook id and event id, and the marker lives for 24 hours in the configured cache backend.
 * **Telegram delivery** — forwards the sender number and message text to a configured Telegram chat, escaping the content and splitting messages that exceed Telegram's length limit.
+* **Telegram replies** — replying with text to a forwarded message queues an SMS to the original sender through the SMSGate server API. Only Telegram users listed in `BOT__ALLOWED_USER_IDS` may use this route; `/start` stays open to everyone.
+* **Durable reply mappings** — every delivered part is recorded in an embedded bbolt database (`STORAGE__URL`) with a 7-day lifetime, so replies to split messages still resolve after a restart.
 * **Webhook event filtering** — accepts only the `sms:received` event; any other event type or a payload without an `event` field is rejected with 400.
 * **Operations endpoints** — liveness, readiness and startup health checks, Prometheus metrics, and a Swagger UI for the API.
 * **Flexible configuration** — configure everything through environment variables or an optional YAML file.
@@ -90,7 +97,61 @@ What it does:
 
 ### Prerequisites
 
-* Go 1.25+
+* A Telegram bot token from [@BotFather](https://t.me/BotFather) and the chat id that should receive the messages.
+* The SMSGate app configured to send webhooks to this service, with a signing key set under **Settings → Webhooks → Signing Key**.
+
+### Run with Docker
+
+The published image is `ghcr.io/android-sms-gateway/telegram-bridge`, built for `linux/amd64` and `linux/arm64` and tagged with the release (`latest`, `v0.0.3`, `v0.0`, `v0`).
+
+1. Create your configuration file and fill in the values.
+   ```sh
+   cp .env.example .env
+   ```
+2. Start the container.
+   ```sh
+   docker run -d --name telegram-bridge \
+     -p 3000:3000 \
+     -e HTTP__ADDRESS=0.0.0.0:3000 \
+     -v telegram-bridge-data:/app/data \
+     --env-file .env \
+     ghcr.io/android-sms-gateway/telegram-bridge:latest
+   ```
+
+The server binds to `127.0.0.1:3000` by default, which a published port cannot reach from outside the container, hence `HTTP__ADDRESS=0.0.0.0:3000`.
+
+The image pre-creates `/app/data` and declares it as a volume — the default `STORAGE__URL=bolt://data/telegram-bridge.db` resolves there relative to the working directory. A declared volume is anonymous and Docker does not reuse it when the container is recreated, so mount a named volume (`telegram-bridge-data` above) on every start, or the reply mappings in the bbolt database are lost with the container.
+
+### Run a pre-built binary
+
+1. Download the archive for your platform from the [releases page](https://github.com/android-sms-gateway/telegram-bridge/releases/latest): `telegram-bridge_<OS>_<arch>.tar.gz` (`.zip` on Windows).
+2. Extract it.
+   ```sh
+   tar -xzf telegram-bridge_Linux_x86_64.tar.gz
+   ```
+3. Create your configuration file and fill in the values.
+   ```sh
+   cp .env.example .env
+   ```
+4. Create the data directory the storage URL points at. The default
+   `STORAGE__URL=bolt://data/telegram-bridge.db` stores the reply mappings in
+   `./data`, and the service refuses to start when the directory of that file
+   does not exist.
+   ```sh
+   mkdir -p data
+   ```
+   For a custom `STORAGE__URL`, create the parent directory of that file path
+   instead.
+5. Run it.
+   ```sh
+   ./telegram-bridge
+   ```
+
+### Build from source
+
+Prerequisites:
+
+* Go 1.26.11+
   ```sh
   go version
   ```
@@ -102,10 +163,8 @@ What it does:
   ```sh
   golangci-lint version
   ```
-* A Telegram bot token from [@BotFather](https://t.me/BotFather) and the chat id that should receive the messages.
-* The SMSGate app configured to send webhooks to this service, with a signing key set under **Settings → Webhooks → Signing Key**.
 
-### Installation
+Steps:
 
 1. Clone the repository.
    ```sh
@@ -120,11 +179,20 @@ What it does:
    ```sh
    cp .env.example .env
    ```
-4. (Optional) Generate the OpenAPI docs.
+4. Create the data directory the storage URL points at. The default
+   `STORAGE__URL=bolt://data/telegram-bridge.db` stores the reply mappings in
+   `./data`, and the service refuses to start when the directory of that file
+   does not exist.
+   ```sh
+   mkdir -p data
+   ```
+   For a custom `STORAGE__URL`, create the parent directory of that file path
+   instead.
+5. (Optional) Generate the OpenAPI docs.
    ```sh
    make gen
    ```
-5. Build the binary.
+6. Build the binary.
    ```sh
    make build
    ```
@@ -134,13 +202,7 @@ What it does:
 <!-- USAGE -->
 ## Usage
 
-Run the service (the default command is `serve`):
-
-```sh
-go run .
-```
-
-Or run the built binary:
+Run the built binary (the default command is `serve`):
 
 ```sh
 ./bin/telegram-bridge
@@ -152,12 +214,18 @@ With live reload during development (requires `air`):
 make air
 ```
 
+Or run straight from the source tree:
+
+```sh
+go run .
+```
+
 CLI commands:
 
 ```sh
-go run . --help      # list commands
-go run . serve       # run the server explicitly
-go run . --version   # print the version
+./bin/telegram-bridge --help      # list commands
+./bin/telegram-bridge serve       # run the server explicitly
+./bin/telegram-bridge --version   # print the version
 ```
 
 The server listens on `127.0.0.1:3000` by default and exposes:
@@ -189,6 +257,15 @@ curl -X POST http://127.0.0.1:3000/api/v1/webhook \
 
 On success the service replies with `{"status":"ok"}` after forwarding the message to Telegram. A redelivery of the same envelope `id` also replies `{"status":"ok"}` but is skipped instead of forwarded again while its marker is present (24-hour TTL). De-duplication is best-effort: if the cache read or marker write fails, the event is still forwarded and acknowledged, so a later redelivery may be forwarded again; the default in-memory cache (`CACHE__URL=memory://`) also loses markers on restart and is not shared between replicas. A redelivery that arrives while the first delivery is still running in the same instance waits for it: it is skipped only if the first forward succeeded, otherwise it retries the forward. The in-flight wait is per instance, so deliveries that reach different replicas may both be forwarded even when Redis is used. See `requests.http` for a ready-to-run example, including how to compute the signature.
 
+### Replying to a forwarded message
+
+Reply with text to the Telegram message that carried the SMS. The service resolves the sender from the stored mapping, queues the answer through the SMSGate server API, and acknowledges it in chat with the recipient and the SMSGate message id. Every part of a split message has its own mapping, so replying to any part works.
+
+* Only users whose numeric Telegram ids are in `BOT__ALLOWED_USER_IDS` may drive replies. An empty allowlist is fail-closed: replies are filtered out before they reach the bridge, and a warning naming the key is logged at startup. `/start` is unaffected and answers any user.
+* The reply path needs SMSGate API access: `SMSGATE__BASE_URL`, `SMSGATE__USERNAME` and `SMSGATE__PASSWORD`. Forwarding keeps working without them — only replies fail.
+* A reply only resolves while the mapping is present (7 days) and the message was forwarded by this service. A reply without text, for example a photo, is rejected.
+* Mappings live in the bbolt file at `STORAGE__URL`, so preserve that file across restarts to keep replies routable.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- CONFIGURATION -->
@@ -198,23 +275,29 @@ Configuration is read from environment variables, an optional `.env` file, and o
 
 The settings you will most likely change:
 
-| Variable                        | Purpose                                                              | Default          |
-| ------------------------------- | -------------------------------------------------------------------- | ---------------- |
-| `TELEGRAM__TOKEN`               | Telegram bot token from @BotFather. Required.                        | *(empty)*        |
-| `BRIDGE__CHAT_ID`               | Telegram chat id that receives forwarded messages.                   | `0`              |
-| `SMSGATE__WEBHOOK__SIGNING_KEY` | Signing key shared with the SMSGate app. Empty rejects all webhooks. | *(empty)*        |
-| `TELEGRAM__PROXY_URL`           | SOCKS5 proxy for Telegram API traffic (`socks5://` or `socks5h://`). | *(empty)*        |
-| `HTTP__ADDRESS`                 | Address the HTTP server binds to.                                    | `127.0.0.1:3000` |
-| `HTTP__OPENAPI__ENABLED`        | Serve the Swagger UI and API document under `/api/v1/docs`.          | `true`           |
-| `CACHE__URL`                    | Dedup cache backend: `memory://` (per-process) or `redis://`.        | `memory://`      |
-| `CACHE__SWEEP_INTERVAL`         | How often expired cache entries are evicted. Must be positive.       | `1m`             |
-| `CONFIG_PATH`                   | Path to an optional YAML configuration file.                         | *(empty)*        |
+| Variable                        | Purpose                                                                          | Default                          |
+| ------------------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
+| `TELEGRAM__TOKEN`               | Telegram bot token from @BotFather. Required.                                    | *(empty)*                        |
+| `BRIDGE__CHAT_ID`               | Telegram chat id that receives forwarded messages.                               | `0`                              |
+| `BOT__ALLOWED_USER_IDS`         | Telegram user ids allowed to reply; empty blocks every reply.                    | `[]`                             |
+| `SMSGATE__BASE_URL`             | SMSGate server API base URL for replies; empty uses the built-in public address. | *(empty)*                        |
+| `SMSGATE__USERNAME`             | Basic-auth user for the SMSGate API reply path.                                  | *(empty)*                        |
+| `SMSGATE__PASSWORD`             | Basic-auth password for the SMSGate API reply path. Secret.                      | *(empty)*                        |
+| `STORAGE__URL`                  | bbolt file holding reply mappings; its parent directory must exist.              | `bolt://data/telegram-bridge.db` |
+| `SMSGATE__WEBHOOK__SIGNING_KEY` | Signing key shared with the SMSGate app. Empty rejects all webhooks.             | *(empty)*                        |
+| `TELEGRAM__PROXY_URL`           | SOCKS5 proxy for Telegram API traffic (`socks5://` or `socks5h://`).             | *(empty)*                        |
+| `TELEGRAM__TIMEOUT`             | Bot API request timeout. Must exceed the 8s long-poll hold.                      | `30s`                            |
+| `HTTP__ADDRESS`                 | Address the HTTP server binds to.                                                | `127.0.0.1:3000`                 |
+| `HTTP__OPENAPI__ENABLED`        | Serve the Swagger UI and API document under `/api/v1/docs`.                      | `true`                           |
+| `CACHE__URL`                    | Dedup cache backend: `memory://` (per-process) or `redis://`.                    | `memory://`                      |
+| `CACHE__SWEEP_INTERVAL`         | How often expired cache entries are evicted. Must be positive.                   | `1m`                             |
+| `CONFIG_PATH`                   | Path to an optional YAML configuration file.                                     | *(empty)*                        |
 
 Notes:
 
 * Keys use `__` to separate nesting levels, and key matching is case-insensitive.
 * `CACHE__URL=redis://` requires Redis 7.4 or newer: the de-duplication markers rely on hash-field TTLs, which earlier Redis versions do not support.
-* `TELEGRAM__TOKEN` and `SMSGATE__WEBHOOK__SIGNING_KEY` are secrets — keep them out of version control.
+* `TELEGRAM__TOKEN`, `SMSGATE__WEBHOOK__SIGNING_KEY` and `SMSGATE__PASSWORD` are secrets — keep them out of version control.
 * `CONFIG_PATH`, `DEBUG` and `TZ` are read directly from the process environment, so set them in your shell rather than in `.env`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -224,8 +307,8 @@ Notes:
 
 - [x] Receive and verify SMSGate webhooks
 - [x] Forward received SMS to Telegram
-- [ ] Reply to forwarded messages from Telegram (send SMS back through SMSGate)
-- [ ] Persist bridge state in an embedded database
+- [x] Reply to forwarded messages from Telegram (send SMS back through SMSGate)
+- [x] Persist bridge state in an embedded database
 - [ ] CI release pipeline hardening
 
 See the [open issues](https://github.com/android-sms-gateway/telegram-bridge/issues) for a full list of proposed features and known issues.
@@ -293,7 +376,7 @@ Project Link: [https://github.com/android-sms-gateway/telegram-bridge](https://g
 [issues-url]: https://github.com/android-sms-gateway/telegram-bridge/issues
 [license-shield]: https://img.shields.io/github/license/android-sms-gateway/telegram-bridge.svg?style=for-the-badge
 [license-url]: https://github.com/android-sms-gateway/telegram-bridge/blob/master/LICENSE
-[go-shield]: https://img.shields.io/badge/go-1.25%2B-00ADD8?style=for-the-badge&logo=go
+[go-shield]: https://img.shields.io/badge/go-1.26.11%2B-00ADD8?style=for-the-badge&logo=go
 [go-url]: https://go.dev/
 [fiber-shield]: https://img.shields.io/badge/Fiber-v2-00b894?style=for-the-badge
 [fiber-url]: https://github.com/gofiber/fiber
